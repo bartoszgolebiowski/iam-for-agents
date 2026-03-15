@@ -111,11 +111,7 @@ function maskToken(token) {
     return 'N/A';
   }
 
-  if (token.length < 20) {
-    return token;
-  }
-
-  return `${token.slice(0, 12)}...${token.slice(-12)}`;
+  return token
 }
 
 function decodeJwtPayload(token) {
@@ -355,8 +351,24 @@ app.post('/notes-data', async (req, res) => {
   const tokenToUse = session.exchangedNotesToken || session.accessToken;
   if (!tokenToUse) {
     session.lastError = 'No token available. Login first or exchange token for NOTES app.';
+    console.warn(`[NOTES-DATA] ISSUE: No token available`);
     return res.redirect('/');
   }
+
+  // Decode token to extract issuer, audience and scope
+  const tokenPayload = decodeJwtPayload(tokenToUse);
+  const issuer = tokenPayload?.iss || 'unknown';
+  const audience = tokenPayload?.aud || 'unknown';
+  const scope = tokenPayload?.scope || 'unknown';
+  const tokenSource = session.exchangedNotesToken ? 'exchangedNotesToken' : 'accessToken';
+
+  console.log(`[NOTES-DATA] ========================================`);
+  console.log(`[NOTES-DATA] Token Details:`);
+  console.log(`[NOTES-DATA]   Source: ${tokenSource}`);
+  console.log(`[NOTES-DATA]   Issuer: ${issuer}`);
+  console.log(`[NOTES-DATA]   Audience: ${audience}`);
+  console.log(`[NOTES-DATA]   Scope: ${scope}`);
+  console.log(`[NOTES-DATA] ========================================`);
 
   const projectId = String(req.body.projectId || '').trim();
   const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
@@ -386,14 +398,17 @@ app.post('/notes-data', async (req, res) => {
 
     if (!response.ok) {
       session.lastError = `NOTES API error (${response.status})`;
-      console.error(`[NOTES-DATA] Error: ${response.status}`);
+      console.error(`[NOTES-DATA] ISSUE: API error response`);
+      console.error(`[NOTES-DATA]   Status: ${response.status}`);
+      console.error(`[NOTES-DATA]   Response: ${JSON.stringify(payload)}`);
     } else {
-      console.log(`[NOTES-DATA] Success: ${response.status}`);
+      console.log(`[NOTES-DATA] ✓ Success: ${response.status}`);
     }
 
     return res.redirect('/');
   } catch (err) {
-    console.error(`[NOTES-DATA] Request error: ${err.message}`);
+    console.error(`[NOTES-DATA] ISSUE: Request error`);
+    console.error(`[NOTES-DATA]   Error: ${err.message}`);
     session.lastError = `NOTES request error: ${err.message}`;
     return res.redirect('/');
   }
@@ -406,8 +421,24 @@ app.post('/todos-data', async (req, res) => {
   const tokenToUse = session.exchangedTodoToken || session.accessToken;
   if (!tokenToUse) {
     session.lastError = 'No token available. Login first or exchange token for TODO app.';
+    console.warn(`[TODOS-DATA] ISSUE: No token available`);
     return res.redirect('/');
   }
+
+  // Decode token to extract issuer, audience and scope
+  const tokenPayload = decodeJwtPayload(tokenToUse);
+  const issuer = tokenPayload?.iss || 'unknown';
+  const audience = tokenPayload?.aud || 'unknown';
+  const scope = tokenPayload?.scope || 'unknown';
+  const tokenSource = session.exchangedTodoToken ? 'exchangedTodoToken' : 'accessToken';
+
+  console.log(`[TODOS-DATA] ========================================`);
+  console.log(`[TODOS-DATA] Token Details:`);
+  console.log(`[TODOS-DATA]   Source: ${tokenSource}`);
+  console.log(`[TODOS-DATA]   Issuer: ${issuer}`);
+  console.log(`[TODOS-DATA]   Audience: ${audience}`);
+  console.log(`[TODOS-DATA]   Scope: ${scope}`);
+  console.log(`[TODOS-DATA] ========================================`);
 
   const projectId = String(req.body.projectId || '').trim();
   const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
@@ -437,15 +468,170 @@ app.post('/todos-data', async (req, res) => {
 
     if (!response.ok) {
       session.lastError = `TODO API error (${response.status})`;
-      console.error(`[TODOS-DATA] Error: ${response.status}`);
+      console.error(`[TODOS-DATA] ISSUE: API error response`);
+      console.error(`[TODOS-DATA]   Status: ${response.status}`);
+      console.error(`[TODOS-DATA]   Response: ${JSON.stringify(payload)}`);
     } else {
-      console.log(`[TODOS-DATA] Success: ${response.status}`);
+      console.log(`[TODOS-DATA] ✓ Success: ${response.status}`);
     }
 
     return res.redirect('/');
   } catch (err) {
-    console.error(`[TODOS-DATA] Request error: ${err.message}`);
+    console.error(`[TODOS-DATA] ISSUE: Request error`);
+    console.error(`[TODOS-DATA]   Error: ${err.message}`);
     session.lastError = `TODO request error: ${err.message}`;
+    return res.redirect('/');
+  }
+});
+
+app.post('/notes-edit', async (req, res) => {
+  const session = getOrCreateSession(req, res);
+  session.lastError = null;
+
+  const tokenToUse = session.exchangedNotesToken || session.accessToken;
+  if (!tokenToUse) {
+    session.lastError = 'No token available. Login first or exchange token for NOTES app.';
+    console.warn(`[NOTES-EDIT] ISSUE: No token available`);
+    return res.redirect('/');
+  }
+
+  // Decode token to extract issuer, audience and scope
+  const tokenPayload = decodeJwtPayload(tokenToUse);
+  const issuer = tokenPayload?.iss || 'unknown';
+  const audience = tokenPayload?.aud || 'unknown';
+  const scope = tokenPayload?.scope || 'unknown';
+  const tokenSource = session.exchangedNotesToken ? 'exchangedNotesToken' : 'accessToken';
+
+  console.log(`[NOTES-EDIT] ========================================`);
+  console.log(`[NOTES-EDIT] Token Details:`);
+  console.log(`[NOTES-EDIT]   Source: ${tokenSource}`);
+  console.log(`[NOTES-EDIT]   Issuer: ${issuer}`);
+  console.log(`[NOTES-EDIT]   Audience: ${audience}`);
+  console.log(`[NOTES-EDIT]   Scope: ${scope}`);
+  console.log(`[NOTES-EDIT] ========================================`);
+
+  const content = String(req.body.content || '').trim();
+  const projectId = String(req.body.projectId || '').trim();
+  const noteId = String(req.body.noteId || '1').trim();
+
+  const url = `${cfg.services.notesApiBaseUrl}/notes/${noteId}`;
+
+  console.log(`[NOTES-EDIT] Sending PUT request to: ${url}`);
+  console.log(`[NOTES-EDIT] Content: ${content}`);
+
+  try {
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${tokenToUse}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content })
+    });
+
+    const text = await response.text();
+    let payload = text;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { raw: text };
+    }
+
+    session.notesPayload = {
+      status: response.status,
+      data: payload
+    };
+
+    if (!response.ok) {
+      session.lastError = `NOTES API edit error (${response.status})`;
+      console.error(`[NOTES-EDIT] ISSUE: API error response`);
+      console.error(`[NOTES-EDIT]   Status: ${response.status}`);
+      console.error(`[NOTES-EDIT]   Response: ${JSON.stringify(payload)}`);
+    } else {
+      console.log(`[NOTES-EDIT] ✓ Success: ${response.status}`);
+    }
+
+    return res.redirect('/');
+  } catch (err) {
+    console.error(`[NOTES-EDIT] ISSUE: Request error`);
+    console.error(`[NOTES-EDIT]   Error: ${err.message}`);
+    session.lastError = `NOTES edit request error: ${err.message}`;
+    return res.redirect('/');
+  }
+});
+
+app.post('/todos-edit', async (req, res) => {
+  const session = getOrCreateSession(req, res);
+  session.lastError = null;
+
+  const tokenToUse = session.exchangedTodoToken || session.accessToken;
+  if (!tokenToUse) {
+    session.lastError = 'No token available. Login first or exchange token for TODO app.';
+    console.warn(`[TODOS-EDIT] ISSUE: No token available`);
+    return res.redirect('/');
+  }
+
+  // Decode token to extract issuer, audience and scope
+  const tokenPayload = decodeJwtPayload(tokenToUse);
+  const issuer = tokenPayload?.iss || 'unknown';
+  const audience = tokenPayload?.aud || 'unknown';
+  const scope = tokenPayload?.scope || 'unknown';
+  const tokenSource = session.exchangedTodoToken ? 'exchangedTodoToken' : 'accessToken';
+
+  console.log(`[TODOS-EDIT] ========================================`);
+  console.log(`[TODOS-EDIT] Token Details:`);
+  console.log(`[TODOS-EDIT]   Source: ${tokenSource}`);
+  console.log(`[TODOS-EDIT]   Issuer: ${issuer}`);
+  console.log(`[TODOS-EDIT]   Audience: ${audience}`);
+  console.log(`[TODOS-EDIT]   Scope: ${scope}`);
+  console.log(`[TODOS-EDIT] ========================================`);
+
+  const content = String(req.body.content || '').trim();
+  const projectId = String(req.body.projectId || '').trim();
+  const todoId = String(req.body.todoId || '1').trim();
+
+  const url = `${cfg.services.todoApiBaseUrl}/todos/${todoId}`;
+
+  console.log(`[TODOS-EDIT] Sending PUT request to: ${url}`);
+  console.log(`[TODOS-EDIT] Content: ${content}`);
+
+  try {
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${tokenToUse}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content })
+    });
+
+    const text = await response.text();
+    let payload = text;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = { raw: text };
+    }
+
+    session.todoPayload = {
+      status: response.status,
+      data: payload
+    };
+
+    if (!response.ok) {
+      session.lastError = `TODO API edit error (${response.status})`;
+      console.error(`[TODOS-EDIT] ISSUE: API error response`);
+      console.error(`[TODOS-EDIT]   Status: ${response.status}`);
+      console.error(`[TODOS-EDIT]   Response: ${JSON.stringify(payload)}`);
+    } else {
+      console.log(`[TODOS-EDIT] ✓ Success: ${response.status}`);
+    }
+
+    return res.redirect('/');
+  } catch (err) {
+    console.error(`[TODOS-EDIT] ISSUE: Request error`);
+    console.error(`[TODOS-EDIT]   Error: ${err.message}`);
+    session.lastError = `TODO edit request error: ${err.message}`;
     return res.redirect('/');
   }
 });

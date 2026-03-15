@@ -259,6 +259,7 @@ bootstrap_clients() {
             c_svc=$(yq -r ".clients[\"$key\"].serviceAccountsEnabled" "$CLIENTS_FILE")
             c_redirects=$(yq -o=json -I=0 ".clients[\"$key\"].redirectUris // []" "$CLIENTS_FILE" 2>/dev/null || echo "[]")
             c_web_origins=$(yq -o=json -I=0 ".clients[\"$key\"].webOrigins // []" "$CLIENTS_FILE" 2>/dev/null || echo "[]")
+            c_mappers=$(yq -o=json -I=0 ".clients[\"$key\"].protocolMappers // []" "$CLIENTS_FILE" 2>/dev/null || echo "[]")
             
             # Handle nulls gracefully if fields are missing
             [ "$c_pub" == "null" ] && c_pub="false"
@@ -266,7 +267,7 @@ bootstrap_clients() {
             [ "$c_dir" == "null" ] && c_dir="false"
             [ "$c_svc" == "null" ] && c_svc="false"
             
-            create_client "$c_id" "$c_secret" "$c_desc" "$c_pub" "$c_std" "$c_dir" "$c_svc" "$c_redirects" "$c_web_origins"
+            create_client "$c_id" "$c_secret" "$c_desc" "$c_pub" "$c_std" "$c_dir" "$c_svc" "$c_redirects" "$c_web_origins" "$c_mappers"
         done
     else
         log_info "No clients found in $CLIENTS_FILE"
@@ -356,6 +357,141 @@ bootstrap_client_role_mappings() {
     log_info "Client role and group mapping bootstrap completed"
 }
 
+# Assign default and optional client scopes to clients
+bootstrap_client_scope_assignments() {
+    if [ ! -f "$CLIENTS_FILE" ]; then
+        log_error "Clients file not found: $CLIENTS_FILE"
+        return 1
+    fi
+
+    log_info "Starting to assign client scopes from $CLIENTS_FILE..."
+
+    local client_keys
+    client_keys=$(yq '.clients | keys | .[]' "$CLIENTS_FILE" 2>/dev/null || echo "")
+
+    if [ -z "$client_keys" ]; then
+        log_info "No clients found in $CLIENTS_FILE"
+        return 0
+    fi
+
+    for key in $client_keys; do
+        local c_id
+        c_id=$(yq -r ".clients[\"$key\"].clientId" "$CLIENTS_FILE")
+
+        # Assign default scopes
+        local default_count
+        default_count=$(yq ".clients[\"$key\"].defaultClientScopes | length" "$CLIENTS_FILE" 2>/dev/null || echo 0)
+        [ "$default_count" == "null" ] && default_count=0
+
+        for ((i=0; i<default_count; i++)); do
+            local scope_name
+            scope_name=$(yq -r ".clients[\"$key\"].defaultClientScopes[$i]" "$CLIENTS_FILE")
+            assign_default_client_scope "$c_id" "$scope_name" || true
+        done
+
+        # Assign optional scopes
+        local optional_count
+        optional_count=$(yq ".clients[\"$key\"].optionalClientScopes | length" "$CLIENTS_FILE" 2>/dev/null || echo 0)
+        [ "$optional_count" == "null" ] && optional_count=0
+
+        for ((i=0; i<optional_count; i++)); do
+            local scope_name
+            scope_name=$(yq -r ".clients[\"$key\"].optionalClientScopes[$i]" "$CLIENTS_FILE")
+            assign_optional_client_scope "$c_id" "$scope_name" || true
+        done
+    done
+
+    log_info "Client scope assignment completed"
+}
+
+# Configure token exchange permissions from YAML
+bootstrap_token_exchange() {
+    if [ ! -f "$CLIENTS_FILE" ]; then
+        log_error "Clients file not found: $CLIENTS_FILE"
+        return 1
+    fi
+
+    local source_client
+    source_client=$(yq -r '.tokenExchange.sourceClient // empty' "$CLIENTS_FILE" 2>/dev/null)
+
+    if [ -z "$source_client" ]; then
+        log_info "No tokenExchange section found in $CLIENTS_FILE"
+        return 0
+    fi
+
+    log_info "Starting to configure token exchange permissions..."
+    log_info "Source client: ${source_client}"
+
+    local target_count
+    target_count=$(yq '.tokenExchange.targetClients | length' "$CLIENTS_FILE" 2>/dev/null || echo 0)
+
+    for ((i=0; i<target_count; i++)); do
+        local target_id policy_name
+        target_id=$(yq -r ".tokenExchange.targetClients[$i].clientId" "$CLIENTS_FILE")
+        policy_name=$(yq -r ".tokenExchange.targetClients[$i].policy.name" "$CLIENTS_FILE")
+
+        [ -z "$target_id" ] || [ "$target_id" == "null" ] && continue
+
+        setup_token_exchange_permission "$target_id" "$source_client" "$policy_name" || true
+    done
+
+    log_info "Token exchange configuration completed"
+}
+
+# Assign roles to service accounts
+bootstrap_service_account_roles() {
+    if [ ! -f "$CLIENTS_FILE" ]; then
+        log_error "Clients file not found: $CLIENTS_FILE"
+        return 1
+    fi
+
+    log_info "Starting to assign service account roles from $CLIENTS_FILE..."
+
+    local sa_client_keys
+    sa_client_keys=$(yq '.serviceAccountRoles | keys | .[]' "$CLIENTS_FILE" 2>/dev/null || echo "")
+
+    if [ -z "$sa_client_keys" ]; then
+        log_info "No serviceAccountRoles section found in $CLIENTS_FILE"
+        return 0
+    fi
+
+    for client_key in $sa_client_keys; do
+        log_info "Processing service account for client '${client_key}'..."
+
+        local sa_user_id
+        sa_user_id=$(get_service_account_user_id "$client_key") || {
+            log_error "Could not get service account for '${client_key}'"
+            continue
+        }
+
+        # Assign realm roles
+        local realm_role_count
+        realm_role_count=$(yq ".serviceAccountRoles[\"$client_key\"].realmRoles | length" "$CLIENTS_FILE" 2>/dev/null || echo 0)
+        [ "$realm_role_count" == "null" ] && realm_role_count=0
+
+        for ((i=0; i<realm_role_count; i++)); do
+            local role_name
+            role_name=$(yq -r ".serviceAccountRoles[\"$client_key\"].realmRoles[$i]" "$CLIENTS_FILE")
+            assign_realm_role_to_user_id "$sa_user_id" "$role_name" || true
+        done
+
+        # Assign client roles
+        local client_role_count
+        client_role_count=$(yq ".serviceAccountRoles[\"$client_key\"].clientRoles | length" "$CLIENTS_FILE" 2>/dev/null || echo 0)
+        [ "$client_role_count" == "null" ] && client_role_count=0
+
+        for ((i=0; i<client_role_count; i++)); do
+            local target_client role_name
+            target_client=$(yq -r ".serviceAccountRoles[\"$client_key\"].clientRoles[$i].client" "$CLIENTS_FILE")
+            role_name=$(yq -r ".serviceAccountRoles[\"$client_key\"].clientRoles[$i].role" "$CLIENTS_FILE")
+
+            assign_client_role_to_user_id "$sa_user_id" "$target_client" "$role_name" || true
+        done
+    done
+
+    log_info "Service account role assignment completed"
+}
+
 # Main execution
 main() {
     echo ""
@@ -391,6 +527,14 @@ main() {
 
     echo ""
 
+    # Assign default and optional scopes to clients
+    if ! bootstrap_client_scope_assignments; then
+        log_error "Client scope assignment failed"
+        exit 1
+    fi
+
+    echo ""
+
     # Bootstrap users
     if ! bootstrap_users; then
         log_error "User bootstrap failed"
@@ -410,6 +554,22 @@ main() {
     # Bootstrap client-role mappings after groups are created
     if ! bootstrap_client_role_mappings; then
         log_error "Client role bootstrap failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Configure token exchange permissions
+    if ! bootstrap_token_exchange; then
+        log_error "Token exchange configuration failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Assign roles to service accounts
+    if ! bootstrap_service_account_roles; then
+        log_error "Service account role assignment failed"
         exit 1
     fi
     

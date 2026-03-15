@@ -85,28 +85,7 @@ clients:
       - notes.write
 
     protocolMappers:
-      # Audience mappers — ensure exchanged tokens carry the right "aud"
-      - name: todo-app-audience
-        protocolMapper: oidc-audience-mapper
-        protocol: openid-connect
-        consentRequired: false
-        config:
-          included.client.audience: todo-app
-          id.token.claim: "false"
-          access.token.claim: "true"
-          introspection.token.claim: "true"
-
-      - name: notes-app-audience
-        protocolMapper: oidc-audience-mapper
-        protocol: openid-connect
-        consentRequired: false
-        config:
-          included.client.audience: notes-app
-          id.token.claim: "false"
-          access.token.claim: "true"
-          introspection.token.claim: "true"
-
-      # Resolve audience from roles (fallback)
+      # Resolve audience dynamically based on requested scopes (standard OIDC behavior)
       - name: audience-resolve
         protocolMapper: oidc-audience-resolve-mapper
         protocol: openid-connect

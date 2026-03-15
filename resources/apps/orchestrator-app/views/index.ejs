@@ -131,7 +131,16 @@
         <input type="number" min="1" name="projectId" />
         <button type="submit">Get Notes Data</button>
       </form>
+      <form method="post" action="/notes-edit">
+        <label>Edit Content (Random Value)</label>
+        <input type="hidden" name="content" id="notes-content" />
+        <button type="submit" onclick="document.getElementById('notes-content').value = 'updated_' + Math.random().toString(36).substring(7)">Edit with Random Value</button>
+      </form>
       <p>This sends Bearer token to NOTES API.</p>
+      <% if (sessions.notesPayload) { %>
+        <h3 style="margin-top: 16px; margin-bottom: 8px;">Latest Response:</h3>
+        <pre><%= JSON.stringify(sessions.notesPayload, null, 2) %></pre>
+      <% } %>
     </section>
 
     <!-- Section 5: Get Data From TODO App -->
@@ -142,25 +151,17 @@
         <input type="number" min="1" name="projectId" />
         <button type="submit">Get TODO Data</button>
       </form>
+      <form method="post" action="/todos-edit">
+        <label>Edit Content (Random Value)</label>
+        <input type="hidden" name="content" id="todo-content" />
+        <button type="submit" onclick="document.getElementById('todo-content').value = 'updated_' + Math.random().toString(36).substring(7)">Edit with Random Value</button>
+      </form>
       <p>This sends Bearer token to TODO API.</p>
+      <% if (sessions.todoPayload) { %>
+        <h3 style="margin-top: 16px; margin-bottom: 8px;">Latest Response:</h3>
+        <pre><%= JSON.stringify(sessions.todoPayload, null, 2) %></pre>
+      <% } %>
     </section>
   </div>
-
-  <section class="card">
-    <h2>Latest NOTES Response</h2>
-    <pre><%= JSON.stringify(sessions.notesPayload, null, 2) %></pre>
-  </section>
-
-  <section class="card">
-    <h2>Latest TODO Response</h2>
-    <pre><%= JSON.stringify(sessions.todoPayload, null, 2) %></pre>
-  </section>
-
-  <% if (sessions.lastError) { %>
-    <section class="card">
-      <h2>Status</h2>
-      <p class="error"><%= sessions.lastError %></p>
-    </section>
-  <% } %>
 </body>
 </html>

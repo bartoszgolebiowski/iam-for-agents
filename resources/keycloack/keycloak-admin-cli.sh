@@ -369,7 +369,7 @@ create_client_scope() {
 }
 
 # Create a client
-# Usage: create_client <client_id> <secret> <description> <public> <standard_flow> <direct_access> <service_accounts> <redirect_uris_json> <web_origins_json>
+# Usage: create_client <client_id> <secret> <description> <public> <standard_flow> <direct_access> <service_accounts> <redirect_uris_json> <web_origins_json> [protocol_mappers_json]
 create_client() {
     local client_id="$1"
     local secret="$2"
@@ -380,6 +380,7 @@ create_client() {
     local service_accounts="${7:-false}"
     local redirects="${8:-[]}"
     local web_origins="${9:-[]}"
+    local protocol_mappers="${10:-[]}"
     
     if [ -z "$ACCESS_TOKEN" ]; then
         log_error "Not authenticated. Call get_access_token first."
@@ -404,6 +405,9 @@ create_client() {
     redirects_json=$(echo "$redirects" | jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo "[]")
     web_origins_json=$(echo "$web_origins" | jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo "[]")
 
+    local protocol_mappers_json
+    protocol_mappers_json=$(echo "$protocol_mappers" | jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo "[]")
+
     local client_json
     client_json=$(jq -a -cn \
         --arg clientId "$client_id" \
@@ -427,6 +431,11 @@ create_client() {
             redirectUris: $redirectUris,
             webOrigins: $webOrigins
         }')
+
+    # Add protocolMappers only if provided (omitting allows Keycloak to add defaults)
+    if [ "$protocol_mappers_json" != "[]" ] && [ "$protocol_mappers_json" != "null" ]; then
+        client_json=$(echo "$client_json" | jq --argjson pm "$protocol_mappers_json" '. + {protocolMappers: $pm}')
+    fi
     
     local response
     response=$(curl -s -w "\n%{http_code}" -X POST \
@@ -711,5 +720,261 @@ assign_client_role_to_group() {
     response_body=$(echo "$response" | sed '$d')
     log_error "Failed to assign client role '${role_name}' (${target_client_id}) to group '${group_name}' (HTTP ${http_code})"
     [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Get client scope internal ID by name
+# Usage: get_client_scope_id <scope_name>
+get_client_scope_id() {
+    local scope_name="$1"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local scope_id
+    scope_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/client-scopes" \
+        2>/dev/null | jq -r ".[] | select(.name==\"$scope_name\") | .id // empty")
+
+    if [ -n "$scope_id" ]; then
+        echo "$scope_id"
+        return 0
+    fi
+
+    log_error "Client scope '${scope_name}' not found"
+    return 1
+}
+
+# Assign a default client scope to a client
+# Usage: assign_default_client_scope <client_id> <scope_name>
+assign_default_client_scope() {
+    local client_id="$1"
+    local scope_name="$2"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    local scope_id
+    scope_id=$(get_client_scope_id "$scope_name") || return 1
+
+    log_info "Assigning default scope '${scope_name}' to client '${client_id}'..."
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/default-client-scopes/${scope_id}" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Default scope '${scope_name}' assigned to client '${client_id}'"
+        return 0
+    fi
+
+    log_error "Failed to assign default scope '${scope_name}' to '${client_id}' (HTTP ${http_code})"
+    return 1
+}
+
+# Assign an optional client scope to a client
+# Usage: assign_optional_client_scope <client_id> <scope_name>
+assign_optional_client_scope() {
+    local client_id="$1"
+    local scope_name="$2"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    local scope_id
+    scope_id=$(get_client_scope_id "$scope_name") || return 1
+
+    log_info "Assigning optional scope '${scope_name}' to client '${client_id}'..."
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/optional-client-scopes/${scope_id}" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Optional scope '${scope_name}' assigned to client '${client_id}'"
+        return 0
+    fi
+
+    log_error "Failed to assign optional scope '${scope_name}' to '${client_id}' (HTTP ${http_code})"
+    return 1
+}
+
+# Enable management permissions on a client (required for token exchange)
+# Usage: enable_client_management_permissions <client_id>
+enable_client_management_permissions() {
+    local client_id="$1"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    log_info "Enabling management permissions on client '${client_id}'..."
+
+    local response
+    response=$(curl -s -X PUT \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d '{"enabled": true}' \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/management/permissions" \
+        2>/dev/null)
+
+    local enabled
+    enabled=$(echo "$response" | jq -r '.enabled // empty' 2>/dev/null)
+
+    if [ "$enabled" == "true" ]; then
+        log_info "Management permissions enabled on client '${client_id}'"
+        echo "$response"
+        return 0
+    fi
+
+    log_error "Failed to enable management permissions on client '${client_id}'"
+    log_error "Response: ${response}"
+    return 1
+}
+
+# Setup token exchange permission: create client policy and assign to token-exchange permission
+# Usage: setup_token_exchange_permission <target_client_id> <source_client_id> [policy_name]
+setup_token_exchange_permission() {
+    local target_client_id="$1"
+    local source_client_id="$2"
+    local policy_name="${3:-allow-token-exchange}"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    # 1. Enable management permissions on the target client and get token-exchange permission ID
+    local perm_response
+    perm_response=$(enable_client_management_permissions "$target_client_id") || return 1
+
+    local token_exchange_perm_id
+    token_exchange_perm_id=$(echo "$perm_response" | jq -r '.scopePermissions["token-exchange"] // empty' 2>/dev/null)
+
+    if [ -z "$token_exchange_perm_id" ]; then
+        log_error "token-exchange permission not found for client '${target_client_id}'"
+        return 1
+    fi
+
+    log_info "Token exchange permission ID: ${token_exchange_perm_id}"
+
+    # 2. Get the realm-management client internal ID
+    local rm_internal_id
+    rm_internal_id=$(get_client_internal_id "realm-management") || return 1
+
+    # 3. Get the source client's internal ID
+    local source_internal_id
+    source_internal_id=$(get_client_internal_id "$source_client_id") || return 1
+
+    # 4. Create a client policy in realm-management's authorization
+    log_info "Creating client policy '${policy_name}' for token exchange..."
+
+    local policy_json
+    policy_json=$(jq -a -cn \
+        --arg name "$policy_name" \
+        --arg clientId "$source_internal_id" \
+        '{
+            type: "client",
+            name: $name,
+            logic: "POSITIVE",
+            decisionStrategy: "UNANIMOUS",
+            clients: [$clientId]
+        }')
+
+    local policy_response
+    policy_response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$policy_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${rm_internal_id}/authz/resource-server/policy/client" \
+        2>/dev/null)
+
+    local policy_http_code
+    policy_http_code=$(echo "$policy_response" | tail -n1)
+    local policy_body
+    policy_body=$(echo "$policy_response" | sed '$d')
+
+    local policy_id
+    if [ "$policy_http_code" == "201" ]; then
+        policy_id=$(echo "$policy_body" | jq -r '.id // empty')
+        log_info "Policy '${policy_name}' created (ID: ${policy_id})"
+    elif [ "$policy_http_code" == "409" ]; then
+        # Policy already exists, look it up
+        log_warning "Policy '${policy_name}' already exists, looking up..."
+        policy_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${rm_internal_id}/authz/resource-server/policy?name=${policy_name}" \
+            2>/dev/null | jq -r '.[0].id // empty')
+
+        if [ -z "$policy_id" ]; then
+            log_error "Could not find existing policy '${policy_name}'"
+            return 1
+        fi
+        log_info "Found existing policy '${policy_name}' (ID: ${policy_id})"
+    else
+        log_error "Failed to create policy '${policy_name}' (HTTP ${policy_http_code})"
+        [ -n "$policy_body" ] && log_error "Response: ${policy_body}"
+        return 1
+    fi
+
+    # 5. Get the current token-exchange permission and attach the policy
+    log_info "Assigning policy to token-exchange permission..."
+
+    local perm_detail
+    perm_detail=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${rm_internal_id}/authz/resource-server/permission/scope/${token_exchange_perm_id}" \
+        2>/dev/null)
+
+    local updated_perm
+    updated_perm=$(echo "$perm_detail" | jq --arg pid "$policy_id" \
+        '.policies = ((.policies // []) + [$pid] | unique)')
+
+    local update_response
+    update_response=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$updated_perm" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${rm_internal_id}/authz/resource-server/permission/scope/${token_exchange_perm_id}" \
+        2>/dev/null)
+
+    local update_http_code
+    update_http_code=$(echo "$update_response" | tail -n1)
+
+    if [ "$update_http_code" == "201" ] || [ "$update_http_code" == "200" ] || [ "$update_http_code" == "204" ]; then
+        log_info "Token exchange permission configured: ${source_client_id} -> ${target_client_id}"
+        return 0
+    fi
+
+    local update_body
+    update_body=$(echo "$update_response" | sed '$d')
+    log_error "Failed to update token-exchange permission (HTTP ${update_http_code})"
+    [ -n "$update_body" ] && log_error "Response: ${update_body}"
     return 1
 }
