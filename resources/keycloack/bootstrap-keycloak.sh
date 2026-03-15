@@ -332,29 +332,25 @@ bootstrap_client_role_mappings() {
 
         [ -z "$group_name" ] || [ "$group_name" == "null" ] && continue
 
-        case "$group_name" in
-            TODO_WRITE)
-                assign_client_role_to_group "$group_name" "todo-app" "todo_writer"
-                ;;
-            TODO_READ)
-                assign_client_role_to_group "$group_name" "todo-app" "todo_reader"
-                ;;
-            NOTES_WRITE)
-                assign_client_role_to_group "$group_name" "notes-app" "notes_writer"
-                ;;
-            NOTES_READ)
-                assign_client_role_to_group "$group_name" "notes-app" "notes_reader"
-                ;;
-            PROJECT_*)
-                local suffix
-                suffix=$(echo "$group_name" | tr '[:upper:]' '[:lower:]' | sed 's/^project_//')
-                assign_client_role_to_group "$group_name" "todo-app" "todo_project_${suffix}"
-                assign_client_role_to_group "$group_name" "notes-app" "notes_project_${suffix}"
-                ;;
-            *)
-                log_warning "No client-role mapping rule defined for group '${group_name}', skipping"
-                ;;
-        esac
+        local cr_count
+        cr_count=$(yq ".groups[$g].clientRoles | length" "$GROUPS_FILE" 2>/dev/null || echo 0)
+        [ "$cr_count" == "null" ] && cr_count=0
+
+        if [ "$cr_count" -le 0 ]; then
+            log_warning "No clientRoles mapping defined for group '${group_name}', skipping"
+            continue
+        fi
+
+        for ((r=0; r<cr_count; r++)); do
+            local cr_client cr_role
+            cr_client=$(yq -r ".groups[$g].clientRoles[$r].client" "$GROUPS_FILE")
+            cr_role=$(yq -r ".groups[$g].clientRoles[$r].role" "$GROUPS_FILE")
+
+            [ -z "$cr_client" ] || [ "$cr_client" == "null" ] && continue
+            [ -z "$cr_role" ]   || [ "$cr_role"   == "null" ] && continue
+
+            assign_client_role_to_group "$group_name" "$cr_client" "$cr_role"
+        done
     done
 
     log_info "Client role and group mapping bootstrap completed"

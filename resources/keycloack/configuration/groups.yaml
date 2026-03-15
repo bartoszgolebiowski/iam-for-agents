@@ -9,15 +9,21 @@ groups:
     attributes:
       type: operation
       level: write
+    clientRoles:
+      - client: todo-app
+        role: todo_writer
 
   - name: TODO_READ
     description: TODO app readers - view only access
     members:
-      - alice
+      - charlie
       - diana
     attributes:
       type: operation
       level: read
+    clientRoles:
+      - client: todo-app
+        role: todo_reader
 
   # Notes app permission levels
   - name: NOTES_WRITE
@@ -28,15 +34,21 @@ groups:
     attributes:
       type: operation
       level: write
+    clientRoles:
+      - client: notes-app
+        role: notes_writer
 
   - name: NOTES_READ
     description: NOTES app readers - view only access
     members:
-      - alice
       - bob
+      - charlie
     attributes:
       type: operation
       level: read
+    clientRoles:
+      - client: notes-app
+        role: notes_reader
 
   # Resource groups - Projects
   - name: PROJECT_HR
@@ -47,6 +59,11 @@ groups:
       type: resource
       project: hr
       department: Human Resources
+    clientRoles:
+      - client: todo-app
+        role: todo_project_hr
+      - client: notes-app
+        role: notes_project_hr
 
   - name: PROJECT_FIN
     description: Finance Management project
@@ -56,6 +73,11 @@ groups:
       type: resource
       project: finance
       department: Finance
+    clientRoles:
+      - client: todo-app
+        role: todo_project_fin
+      - client: notes-app
+        role: notes_project_fin
 
   - name: PROJECT_OPS
     description: Operations Management project
@@ -65,6 +87,11 @@ groups:
       type: resource
       project: operations
       department: Operations
+    clientRoles:
+      - client: todo-app
+        role: todo_project_ops
+      - client: notes-app
+        role: notes_project_ops
 
   - name: PROJECT_SALES
     description: Sales Management project
@@ -74,3 +101,8 @@ groups:
       type: resource
       project: sales
       department: Sales
+    clientRoles:
+      - client: todo-app
+        role: todo_project_sales
+      - client: notes-app
+        role: notes_project_sales
