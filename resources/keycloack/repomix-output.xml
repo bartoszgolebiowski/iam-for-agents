@@ -1,0 +1,2160 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+bootstrap-keycloak.sh
+configuration/clients.yaml
+configuration/groups.yaml
+configuration/matrix.md
+configuration/README.md
+configuration/users.yaml
+docker-compose.yml
+keycloak-admin-cli.sh
+readme.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="bootstrap-keycloak.sh">
+#!/bin/bash
+
+# Bootstrap Keycloak Users, Groups, and Clients
+# Usage: ./bootstrap-keycloak.sh [options]
+# Options:
+#   -u, --url URL           Keycloak URL (default: http://localhost:8080)
+#   -r, --realm REALM       Realm name (default: master)
+#   -a, --admin USER        Admin username (default: admin)
+#   -p, --password PASS     Admin password (default: admin)
+#   --users-file FILE       Path to users YAML file (default: users.yaml)
+#   --groups-file FILE      Path to groups YAML file (default: groups.yaml)
+#   --clients-file FILE     Path to clients YAML file (default: clients.yaml)
+#   -h, --help             Show this help message
+
+set -euo pipefail
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Default values
+KEYCLOAK_URL="http://localhost:8080"
+KEYCLOAK_REALM="master"
+KEYCLOAK_ADMIN_USER="admin"
+KEYCLOAK_ADMIN_PASSWORD="admin"
+USERS_FILE="${SCRIPT_DIR}/configuration/users.yaml"
+GROUPS_FILE="${SCRIPT_DIR}/configuration/groups.yaml"
+CLIENTS_FILE="${SCRIPT_DIR}/configuration/clients.yaml"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -u|--url)
+            KEYCLOAK_URL="$2"
+            shift 2
+            ;;
+        -r|--realm)
+            KEYCLOAK_REALM="$2"
+            shift 2
+            ;;
+        -a|--admin)
+            KEYCLOAK_ADMIN_USER="$2"
+            shift 2
+            ;;
+        -p|--password)
+            KEYCLOAK_ADMIN_PASSWORD="$2"
+            shift 2
+            ;;
+        --users-file)
+            USERS_FILE="$2"
+            shift 2
+            ;;
+        --groups-file)
+            GROUPS_FILE="$2"
+            shift 2
+            ;;
+        --clients-file)
+            CLIENTS_FILE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+show_help() {
+    cat <<EOF
+Bootstrap Keycloak Users, Groups, and Clients
+
+Usage: $0 [options]
+
+Options:
+  -u, --url URL           Keycloak URL (default: http://localhost:8080)
+  -r, --realm REALM       Realm name (default: master)
+  -a, --admin USER        Admin username (default: admin)
+  -p, --password PASS     Admin password (default: admin)
+  --users-file FILE       Path to users YAML file (default: users.yaml)
+  --groups-file FILE      Path to groups YAML file (default: groups.yaml)
+  --clients-file FILE     Path to clients YAML file (default: clients.yaml)
+  -h, --help             Show this help message
+
+Examples:
+  # Bootstrap with default values
+  $0
+
+  # Bootstrap with custom YAML files
+  $0 --users-file /etc/keycloak/users.yaml --groups-file /etc/keycloak/groups.yaml --clients-file /etc/keycloak/clients.yaml
+EOF
+}
+
+# Source the admin CLI functions
+if [ ! -f "${SCRIPT_DIR}/keycloak-admin-cli.sh" ]; then
+    echo "[ERROR] keycloak-admin-cli.sh not found in ${SCRIPT_DIR}"
+    exit 1
+fi
+
+source "${SCRIPT_DIR}/keycloak-admin-cli.sh"
+
+# Override environment variables with command line arguments
+export KEYCLOAK_URL
+export KEYCLOAK_REALM
+export KEYCLOAK_ADMIN_USER
+export KEYCLOAK_ADMIN_PASSWORD
+
+# Check prerequisites
+check_prerequisites() {
+    local tools=("curl" "yq" "jq")
+    local missing=0
+    
+    for tool in "${tools[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            log_error "$tool is not installed. Please install it first."
+            missing=1
+        fi
+    done
+    
+    if [ $missing -eq 1 ]; then
+        log_error "Please install missing tools and try again."
+        exit 1
+    fi
+}
+
+# Parse users from YAML and create them
+bootstrap_users() {
+    if [ ! -f "$USERS_FILE" ]; then
+        log_error "Users file not found: $USERS_FILE"
+        return 1
+    fi
+    
+    log_info "Starting to bootstrap users from $USERS_FILE..."
+    
+    # Use yq to extract and process each user
+    local user_count
+    user_count=$(yq '.users | length' "$USERS_FILE")
+    
+    log_info "Found $user_count users to create"
+    
+    for ((i=0; i<user_count; i++)); do
+        local username email firstName lastName password enabled
+        
+        username=$(yq ".users[$i].username" "$USERS_FILE")
+        email=$(yq ".users[$i].email" "$USERS_FILE")
+        firstName=$(yq ".users[$i].firstName" "$USERS_FILE")
+        lastName=$(yq ".users[$i].lastName" "$USERS_FILE")
+        password=$(yq ".users[$i].credentials[0].value" "$USERS_FILE")
+        enabled=$(yq ".users[$i].enabled" "$USERS_FILE")
+        
+        create_user "$username" "$email" "$firstName" "$lastName" "$password" "$enabled"
+        
+        # Set user attributes if they exist
+        local attr_count
+        attr_count=$(yq ".users[$i].attributes | length" "$USERS_FILE" 2>/dev/null || echo 0)
+        
+        if [ "$attr_count" -gt 0 ]; then
+            local attrs=()
+            for ((j=0; j<attr_count; j++)); do
+                local key value
+                key=$(yq ".users[$i].attributes | keys[$j]" "$USERS_FILE")
+                value=$(yq ".users[$i].attributes[$key]" "$USERS_FILE")
+                attrs+=("$key:$value")
+            done
+            
+            if [ ${#attrs[@]} -gt 0 ]; then
+                set_user_attributes "$username" "${attrs[@]}" || true
+            fi
+        fi
+    done
+    
+    log_info "User bootstrap completed"
+}
+
+# Parse groups from YAML and create them
+bootstrap_groups() {
+    if [ ! -f "$GROUPS_FILE" ]; then
+        log_error "Groups file not found: $GROUPS_FILE"
+        return 1
+    fi
+    
+    log_info "Starting to bootstrap groups from $GROUPS_FILE..."
+    
+    # Use yq to extract and process each group
+    local group_count
+    group_count=$(yq '.groups | length' "$GROUPS_FILE")
+    
+    log_info "Found $group_count groups to create"
+    
+    for ((i=0; i<group_count; i++)); do
+        local group_name description
+        
+        group_name=$(yq ".groups[$i].name" "$GROUPS_FILE")
+        description=$(yq ".groups[$i].description" "$GROUPS_FILE" 2>/dev/null || echo "")
+        
+        create_group "$group_name" "$description"
+        
+        # Add members to group
+        local member_count
+        member_count=$(yq ".groups[$i].members | length" "$GROUPS_FILE" 2>/dev/null || echo 0)
+        
+        if [ "$member_count" -gt 0 ]; then
+            for ((j=0; j<member_count; j++)); do
+                local member_name
+                member_name=$(yq ".groups[$i].members[$j]" "$GROUPS_FILE")
+                add_user_to_group "$member_name" "$group_name" || true
+            done
+        fi
+    done
+    
+    log_info "Group bootstrap completed"
+}
+
+# Parse clients and scopes from YAML and create them
+bootstrap_clients() {
+    if [ ! -f "$CLIENTS_FILE" ]; then
+        log_error "Clients file not found: $CLIENTS_FILE"
+        return 1
+    fi
+    
+    log_info "Starting to bootstrap clients and scopes from $CLIENTS_FILE..."
+    
+    # 1. Create Client Scopes
+    local scope_count
+    scope_count=$(yq '.scopes | length' "$CLIENTS_FILE" 2>/dev/null || echo 0)
+    
+    if [ "$scope_count" -gt 0 ] && [ "$scope_count" != "null" ]; then
+        log_info "Found $scope_count custom scopes to create"
+        for ((i=0; i<scope_count; i++)); do
+            local scope_id scope_desc scope_proto
+            scope_id=$(yq ".scopes[$i].id" "$CLIENTS_FILE")
+            scope_desc=$(yq ".scopes[$i].description" "$CLIENTS_FILE")
+            scope_proto=$(yq ".scopes[$i].protocol" "$CLIENTS_FILE")
+            
+            create_client_scope "$scope_id" "$scope_desc" "$scope_proto"
+        done
+    else
+        log_info "No custom scopes found in $CLIENTS_FILE"
+    fi
+
+    # 2. Create Clients
+    local client_keys
+    client_keys=$(yq '.clients | keys | .[]' "$CLIENTS_FILE" 2>/dev/null || echo "")
+    
+    if [ -n "$client_keys" ]; then
+        log_info "Creating clients..."
+        for key in $client_keys; do
+            local c_id c_secret c_desc c_pub c_std c_dir c_svc c_redirects c_web_origins
+            
+            c_id=$(yq -r ".clients[\"$key\"].clientId" "$CLIENTS_FILE")
+            c_secret=$(yq -r ".clients[\"$key\"].clientSecret" "$CLIENTS_FILE")
+            c_desc=$(yq -r ".clients[\"$key\"].description // \"\"" "$CLIENTS_FILE" 2>/dev/null || echo "")
+            c_pub=$(yq -r ".clients[\"$key\"].public" "$CLIENTS_FILE")
+            c_std=$(yq -r ".clients[\"$key\"].standardFlowEnabled" "$CLIENTS_FILE")
+            c_dir=$(yq -r ".clients[\"$key\"].directAccessGrantsEnabled" "$CLIENTS_FILE")
+            c_svc=$(yq -r ".clients[\"$key\"].serviceAccountsEnabled" "$CLIENTS_FILE")
+            c_redirects=$(yq -o=json -I=0 ".clients[\"$key\"].redirectUris // []" "$CLIENTS_FILE" 2>/dev/null || echo "[]")
+            c_web_origins=$(yq -o=json -I=0 ".clients[\"$key\"].webOrigins // []" "$CLIENTS_FILE" 2>/dev/null || echo "[]")
+            
+            # Handle nulls gracefully if fields are missing
+            [ "$c_pub" == "null" ] && c_pub="false"
+            [ "$c_std" == "null" ] && c_std="false"
+            [ "$c_dir" == "null" ] && c_dir="false"
+            [ "$c_svc" == "null" ] && c_svc="false"
+            
+            create_client "$c_id" "$c_secret" "$c_desc" "$c_pub" "$c_std" "$c_dir" "$c_svc" "$c_redirects" "$c_web_origins"
+        done
+    else
+        log_info "No clients found in $CLIENTS_FILE"
+    fi
+    
+    log_info "Client and scope bootstrap completed"
+}
+
+# Parse client roles and service account role mappings from YAML
+bootstrap_client_role_mappings() {
+    if [ ! -f "$CLIENTS_FILE" ]; then
+        log_error "Clients file not found: $CLIENTS_FILE"
+        return 1
+    fi
+
+    log_info "Starting to bootstrap client roles and service-account mappings from $CLIENTS_FILE..."
+
+    # 1. Create declared client roles
+    local role_client_keys
+    role_client_keys=$(yq '.clientRoles | keys | .[]' "$CLIENTS_FILE" 2>/dev/null || echo "")
+
+    if [ -n "$role_client_keys" ]; then
+        for client_key in $role_client_keys; do
+            local role_count
+            role_count=$(yq ".clientRoles[\"$client_key\"] | length" "$CLIENTS_FILE" 2>/dev/null || echo 0)
+
+            if [ "$role_count" == "null" ] || [ "$role_count" -le 0 ]; then
+                continue
+            fi
+
+            for ((i=0; i<role_count; i++)); do
+                local role_name role_desc
+                role_name=$(yq -r ".clientRoles[\"$client_key\"][$i].name" "$CLIENTS_FILE")
+                role_desc=$(yq -r ".clientRoles[\"$client_key\"][$i].description // \"\"" "$CLIENTS_FILE" 2>/dev/null || echo "")
+
+                [ -z "$role_name" ] || [ "$role_name" == "null" ] && continue
+                create_client_role "$client_key" "$role_name" "$role_desc"
+            done
+        done
+    else
+        log_info "No clientRoles section found in $CLIENTS_FILE"
+    fi
+
+    # 2. Assign client roles to groups (group-based authorization model)
+    if [ ! -f "$GROUPS_FILE" ]; then
+        log_warning "Groups file not found: $GROUPS_FILE (skipping group role mappings)"
+        log_info "Client role bootstrap completed"
+        return 0
+    fi
+
+    local group_count
+    group_count=$(yq '.groups | length' "$GROUPS_FILE" 2>/dev/null || echo 0)
+
+    if [ "$group_count" == "null" ] || [ "$group_count" -le 0 ]; then
+        log_info "No groups found in $GROUPS_FILE; skipping group role mappings"
+        log_info "Client role bootstrap completed"
+        return 0
+    fi
+
+    for ((g=0; g<group_count; g++)); do
+        local group_name
+        group_name=$(yq -r ".groups[$g].name" "$GROUPS_FILE")
+
+        [ -z "$group_name" ] || [ "$group_name" == "null" ] && continue
+
+        local cr_count
+        cr_count=$(yq ".groups[$g].clientRoles | length" "$GROUPS_FILE" 2>/dev/null || echo 0)
+        [ "$cr_count" == "null" ] && cr_count=0
+
+        if [ "$cr_count" -le 0 ]; then
+            log_warning "No clientRoles mapping defined for group '${group_name}', skipping"
+            continue
+        fi
+
+        for ((r=0; r<cr_count; r++)); do
+            local cr_client cr_role
+            cr_client=$(yq -r ".groups[$g].clientRoles[$r].client" "$GROUPS_FILE")
+            cr_role=$(yq -r ".groups[$g].clientRoles[$r].role" "$GROUPS_FILE")
+
+            [ -z "$cr_client" ] || [ "$cr_client" == "null" ] && continue
+            [ -z "$cr_role" ]   || [ "$cr_role"   == "null" ] && continue
+
+            assign_client_role_to_group "$group_name" "$cr_client" "$cr_role"
+        done
+    done
+
+    log_info "Client role and group mapping bootstrap completed"
+}
+
+# Main execution
+main() {
+    echo ""
+    log_info "=========================================="
+    log_info "Keycloak Bootstrap Script"
+    log_info "=========================================="
+    echo ""
+    
+    log_info "Configuration:"
+    log_info "  Keycloak URL: $KEYCLOAK_URL"
+    log_info "  Realm: $KEYCLOAK_REALM"
+    log_info "  Admin User: $KEYCLOAK_ADMIN_USER"
+    log_info "  Users file: $USERS_FILE"
+    log_info "  Groups file: $GROUPS_FILE"
+    log_info "  Clients file: $CLIENTS_FILE"
+    echo ""
+    
+    # Check prerequisites
+    log_info "Checking prerequisites..."
+    check_prerequisites
+    
+    # Authenticate
+    if ! get_access_token; then
+        log_error "Authentication failed"
+        exit 1
+    fi
+    
+    # Bootstrap clients & scopes
+    if ! bootstrap_clients; then
+        log_error "Client bootstrap failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Bootstrap users
+    if ! bootstrap_users; then
+        log_error "User bootstrap failed"
+        exit 1
+    fi
+    
+    echo ""
+    
+    # Bootstrap groups
+    if ! bootstrap_groups; then
+        log_error "Group bootstrap failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Bootstrap client-role mappings after groups are created
+    if ! bootstrap_client_role_mappings; then
+        log_error "Client role bootstrap failed"
+        exit 1
+    fi
+    
+    echo ""
+    log_info "=========================================="
+    log_info "Bootstrap completed successfully!"
+    log_info "=========================================="
+    echo ""
+    
+    # Print summary
+    log_info "Access Keycloak: $KEYCLOAK_URL"
+    log_info "Admin Console: $KEYCLOAK_URL/admin"
+    log_info "Credentials: $KEYCLOAK_ADMIN_USER / *****"
+}
+
+# Run main function
+main "$@"
+</file>
+
+<file path="configuration/clients.yaml">
+# Keycloak Clients, Scopes, and Token Exchange Configuration
+#
+# Flow:
+#   1. User logs in via orchestrator-app (password grant or authorization code)
+#      → Keycloak returns id_token + access_token (audience: orchestrator-app)
+#   2. Orchestrator exchanges access_token for a new token scoped to todo-app or notes-app
+#      → POST /token with grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+#      → Receives exchanged access_token (audience: todo-app or notes-app)
+#   3. Orchestrator calls resource server API with exchanged token
+#      → Authorization: Bearer <exchanged_token>
+#      → Resource server reads preferred_username + groups from JWT claims
+
+realm:
+  name: master
+  accessTokenLifespan: 3600
+  refreshTokenLifespan: 86400
+  features:
+    tokenExchange: enabled        # Must be enabled at realm level (Preview feature)
+    adminFineGrainedAuthz: enabled # Required for token exchange permissions
+
+# ---------------------------------------------------------------------------
+# Custom Client Scopes
+# ---------------------------------------------------------------------------
+# Note: openid, profile, email are Keycloak built-in scopes — do NOT redefine them.
+# Only custom application-specific scopes are listed here.
+scopes:
+  - id: todo.read
+    name: todo.read
+    description: Permission to read TODO tasks and projects
+    protocol: openid-connect
+
+  - id: todo.write
+    name: todo.write
+    description: Permission to create and modify TODO tasks
+    protocol: openid-connect
+
+  - id: notes.read
+    name: notes.read
+    description: Permission to read notes and projects
+    protocol: openid-connect
+
+  - id: notes.write
+    name: notes.write
+    description: Permission to create and modify notes
+    protocol: openid-connect
+
+# ---------------------------------------------------------------------------
+# Clients
+# ---------------------------------------------------------------------------
+clients:
+
+  # =========================================================================
+  # Orchestrator – the only client that users log in to.
+  # Collects id_token + access_token, then exchanges for app-specific tokens.
+  # =========================================================================
+  orchestrator-app:
+    clientId: orchestrator-app
+    clientSecret: orchestrator-secret
+    description: Orchestrator UI – login, token exchange, delegate to resource servers
+    clientAuthenticatorType: client-secret
+    public: false
+    standardFlowEnabled: true           # Authorization Code flow (browser login)
+    directAccessGrantsEnabled: true     # Resource Owner Password grant (for testing)
+    implicitFlowEnabled: false
+    serviceAccountsEnabled: true        # Needed for client-level token exchange permissions
+
+    redirectUris:
+      - "http://localhost:3003/*"
+      - "http://orchestrator-app:3003/*"
+
+    webOrigins:
+      - "http://localhost:3003"
+      - "http://orchestrator-app:3003"
+
+    defaultClientScopes:
+      - openid      # built-in — required to receive id_token
+      - profile     # built-in — preferred_username, name, etc.
+      - email       # built-in — email claim
+
+    optionalClientScopes:
+      - todo.read
+      - todo.write
+      - notes.read
+      - notes.write
+
+    protocolMappers:
+      # Audience mappers — ensure exchanged tokens carry the right "aud"
+      - name: todo-app-audience
+        protocolMapper: oidc-audience-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          included.client.audience: todo-app
+          id.token.claim: "false"
+          access.token.claim: "true"
+          introspection.token.claim: "true"
+
+      - name: notes-app-audience
+        protocolMapper: oidc-audience-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          included.client.audience: notes-app
+          id.token.claim: "false"
+          access.token.claim: "true"
+          introspection.token.claim: "true"
+
+      # Resolve audience from roles (fallback)
+      - name: audience-resolve
+        protocolMapper: oidc-audience-resolve-mapper
+        protocol: openid-connect
+        consentRequired: false
+
+      # Group membership claim
+      - name: groups
+        protocolMapper: oidc-group-membership-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          claim.name: groups
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+  # =========================================================================
+  # TODO App – resource server (bearer-token consumer).
+  # Does NOT log users in; only validates tokens issued via token exchange.
+  # =========================================================================
+  todo-app:
+    clientId: todo-app
+    clientSecret: todo-app-secret
+    description: TODO application resource server
+    clientAuthenticatorType: client-secret
+    public: false
+    standardFlowEnabled: false
+    directAccessGrantsEnabled: false
+    implicitFlowEnabled: false
+    serviceAccountsEnabled: false
+
+    # Fine-grained permissions must be enabled on this client
+    # so orchestrator-app can exchange tokens targeting it.
+    authorizationServicesEnabled: false
+    permissionsEnabled: true
+
+    defaultClientScopes:
+      - openid
+      - profile
+      - email
+
+    optionalClientScopes:
+      - todo.read
+      - todo.write
+
+    protocolMappers:
+      - name: username
+        protocolMapper: oidc-usermodel-property-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          user.attribute: username
+          claim.name: preferred_username
+          jsonType.label: String
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+      # Map Keycloak group memberships into token "groups" claim
+      - name: groups
+        protocolMapper: oidc-group-membership-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          claim.name: groups
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+  # =========================================================================
+  # NOTES App – resource server (bearer-token consumer).
+  # Does NOT log users in; only validates tokens issued via token exchange.
+  # =========================================================================
+  notes-app:
+    clientId: notes-app
+    clientSecret: notes-app-secret
+    description: NOTES application resource server
+    clientAuthenticatorType: client-secret
+    public: false
+    standardFlowEnabled: false
+    directAccessGrantsEnabled: false
+    implicitFlowEnabled: false
+    serviceAccountsEnabled: false
+
+    authorizationServicesEnabled: false
+    permissionsEnabled: true
+
+    defaultClientScopes:
+      - openid
+      - profile
+      - email
+
+    optionalClientScopes:
+      - notes.read
+      - notes.write
+
+    protocolMappers:
+      - name: username
+        protocolMapper: oidc-usermodel-property-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          user.attribute: username
+          claim.name: preferred_username
+          jsonType.label: String
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+      - name: groups
+        protocolMapper: oidc-group-membership-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          claim.name: groups
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+# ---------------------------------------------------------------------------
+# Token Exchange Permissions
+# ---------------------------------------------------------------------------
+# Keycloak controls token exchange via fine-grained permissions on the TARGET
+# client. You must enable "Permissions" on the target client, then create a
+# policy that allows the SOURCE client's service account to exchange.
+#
+# Steps in Keycloak Admin Console:
+#
+#   For each target client (todo-app, notes-app):
+#     1. Go to Clients → <target-client> → Permissions → Enable
+#     2. Click "token-exchange" permission
+#     3. Create a "Client" policy:
+#        - Name: allow-orchestrator-exchange
+#        - Clients: orchestrator-app
+#        - Logic: Positive
+#     4. Assign this policy to the "token-exchange" permission
+#
+# Token exchange request (orchestrator → target):
+#   POST /realms/master/protocol/openid-connect/token
+#   Content-Type: application/x-www-form-urlencoded
+#
+#   grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+#   client_id=orchestrator-app
+#   client_secret=orchestrator-secret
+#   subject_token=<user_access_token>
+#   subject_token_type=urn:ietf:params:oauth:token-type:access_token
+#   requested_token_type=urn:ietf:params:oauth:token-type:access_token
+#   audience=<todo-app | notes-app>
+
+tokenExchange:
+  sourceClient: orchestrator-app
+  targetClients:
+    - clientId: todo-app
+      permission: token-exchange
+      policy:
+        name: allow-orchestrator-exchange
+        type: client
+        clients:
+          - orchestrator-app
+        logic: positive
+
+    - clientId: notes-app
+      permission: token-exchange
+      policy:
+        name: allow-orchestrator-exchange
+        type: client
+        clients:
+          - orchestrator-app
+        logic: positive
+
+# ---------------------------------------------------------------------------
+# Client Roles
+# ---------------------------------------------------------------------------
+# Project roles follow the pattern: <APP>_PROJECT_<CODE>_<LEVEL>
+# They mirror the resource groups defined in groups.yaml (PROJECT_HR, PROJECT_FIN, etc.)
+clientRoles:
+  orchestrator-app:
+    - name: orchestrator
+      description: Orchestrator service account role
+
+  todo-app:
+    # Operation-level roles
+    - name: todo_writer
+      description: Create and modify TODO tasks
+    - name: todo_reader
+      description: Read-only access to TODO tasks
+
+    # Project-scoped roles – mirror groups.yaml PROJECT_* groups
+    - name: todo_project_hr
+      description: Access to HR project in TODO app (mirrors PROJECT_HR)
+    - name: todo_project_fin
+      description: Access to Finance project in TODO app (mirrors PROJECT_FIN)
+    - name: todo_project_ops
+      description: Access to Operations project in TODO app (mirrors PROJECT_OPS)
+    - name: todo_project_sales
+      description: Access to Sales project in TODO app (mirrors PROJECT_SALES)
+
+  notes-app:
+    # Operation-level roles
+    - name: notes_writer
+      description: Create and modify notes
+    - name: notes_reader
+      description: Read-only access to notes
+
+    # Project-scoped roles – mirror groups.yaml PROJECT_* groups
+    - name: notes_project_hr
+      description: Access to HR project in NOTES app (mirrors PROJECT_HR)
+    - name: notes_project_fin
+      description: Access to Finance project in NOTES app (mirrors PROJECT_FIN)
+    - name: notes_project_ops
+      description: Access to Operations project in NOTES app (mirrors PROJECT_OPS)
+    - name: notes_project_sales
+      description: Access to Sales project in NOTES app (mirrors PROJECT_SALES)
+
+# ---------------------------------------------------------------------------
+# Service Account Role Assignments
+# ---------------------------------------------------------------------------
+# The orchestrator service account is granted all project roles on both apps
+# so it can perform token exchange on behalf of any logged-in user.
+serviceAccountRoles:
+  orchestrator-app:
+    realmRoles:
+      - default-roles-master
+    clientRoles:
+      - client: todo-app
+        role: todo_project_hr
+      - client: todo-app
+        role: todo_project_fin
+      - client: todo-app
+        role: todo_project_ops
+      - client: todo-app
+        role: todo_project_sales
+      - client: notes-app
+        role: notes_project_hr
+      - client: notes-app
+        role: notes_project_fin
+      - client: notes-app
+        role: notes_project_ops
+      - client: notes-app
+        role: notes_project_sales
+</file>
+
+<file path="configuration/groups.yaml">
+# Operation-level groups for TODO app permissions
+groups:
+  # Permission levels
+  - name: TODO_WRITE
+    description: TODO app writers - create and modify tasks
+    members:
+      - alice
+      - bob
+    attributes:
+      type: operation
+      level: write
+    clientRoles:
+      - client: todo-app
+        role: todo_writer
+
+  - name: TODO_READ
+    description: TODO app readers - view only access
+    members:
+      - charlie
+      - diana
+    attributes:
+      type: operation
+      level: read
+    clientRoles:
+      - client: todo-app
+        role: todo_reader
+
+  # Notes app permission levels
+  - name: NOTES_WRITE
+    description: NOTES app writers - create and modify notes
+    members:
+      - alice
+      - diana
+    attributes:
+      type: operation
+      level: write
+    clientRoles:
+      - client: notes-app
+        role: notes_writer
+
+  - name: NOTES_READ
+    description: NOTES app readers - view only access
+    members:
+      - bob
+      - charlie
+    attributes:
+      type: operation
+      level: read
+    clientRoles:
+      - client: notes-app
+        role: notes_reader
+
+  # Resource groups - Projects
+  - name: PROJECT_HR
+    description: HR Management project
+    members:
+      - alice
+    attributes:
+      type: resource
+      project: hr
+      department: Human Resources
+    clientRoles:
+      - client: todo-app
+        role: todo_project_hr
+      - client: notes-app
+        role: notes_project_hr
+
+  - name: PROJECT_FIN
+    description: Finance Management project
+    members:
+      - bob
+    attributes:
+      type: resource
+      project: finance
+      department: Finance
+    clientRoles:
+      - client: todo-app
+        role: todo_project_fin
+      - client: notes-app
+        role: notes_project_fin
+
+  - name: PROJECT_OPS
+    description: Operations Management project
+    members:
+      - charlie
+    attributes:
+      type: resource
+      project: operations
+      department: Operations
+    clientRoles:
+      - client: todo-app
+        role: todo_project_ops
+      - client: notes-app
+        role: notes_project_ops
+
+  - name: PROJECT_SALES
+    description: Sales Management project
+    members:
+      - diana
+    attributes:
+      type: resource
+      project: sales
+      department: Sales
+    clientRoles:
+      - client: todo-app
+        role: todo_project_sales
+      - client: notes-app
+        role: notes_project_sales
+</file>
+
+<file path="configuration/matrix.md">
+# User-Group Membership Matrix
+
+## Users to Groups Assignment
+
+### TODO App Groups
+
+| User | TODO_ADMIN | TODO_WRITE | TODO_READ |
+|------|:----------:|:----------:|:---------:|
+| alice | ❌ | ✅ | ✅ |
+| bob | ❌ | ✅ | ❌ |
+| charlie | ✅ | ❌ | ❌ |
+| diana | ✅ | ❌ | ❌ |
+
+### NOTES App Groups
+
+| User | NOTES_ADMIN | NOTES_WRITE | NOTES_READ |
+|------|:-----------:|:-----------:|:----------:|
+| alice | ❌ | ✅ | ✅ |
+| bob | ❌ | ✅ | ✅ |
+| charlie | ✅ | ✅ | ❌ |
+| diana | ✅ | ❌ | ❌ |
+
+### Project Resource Groups
+
+| User | PROJECT_HR | PROJECT_FIN | PROJECT_OPS | PROJECT_SALES |
+|------|:----------:|:-----------:|:-----------:|:-------------:|
+| alice | ✅ | ❌ | ❌ | ✅ |
+| bob | ❌ | ✅ | ✅ | ❌ |
+| charlie | ✅ | ✅ | ✅ | ❌ |
+| diana | ✅ | ✅ | ❌ | ✅ |
+
+## Groups to Users Assignment
+
+| Group | Members | Count | Type | Description |
+|-------|---------|-------|------|-------------|
+| **TODO_ADMIN** | charlie, diana | 2 | Operation | TODO app administrators - full access |
+| **TODO_WRITE** | alice, bob | 2 | Operation | TODO app writers - create and modify tasks |
+| **TODO_READ** | alice | 1 | Operation | TODO app readers - view only access |
+| **NOTES_ADMIN** | charlie, diana | 2 | Operation | NOTES app administrators - full access |
+| **NOTES_WRITE** | alice, bob, charlie | 3 | Operation | NOTES app writers - create and modify notes |
+| **NOTES_READ** | alice, bob | 2 | Operation | NOTES app readers - view only access |
+| **PROJECT_HR** | alice, charlie, diana | 3 | Resource | HR Management project |
+| **PROJECT_FIN** | bob, charlie, diana | 3 | Resource | Finance Management project |
+| **PROJECT_OPS** | bob, charlie | 2 | Resource | Operations Management project |
+| **PROJECT_SALES** | alice, diana | 2 | Resource | Sales Management project |
+
+## User Summary
+
+| User | Groups Count | Group List | Permissions |
+|------|:------------:|------------|-------------|
+| **alice** | 6 | TODO_WRITE, TODO_READ, NOTES_WRITE, NOTES_READ, PROJECT_HR, PROJECT_SALES | Write/Read for TODO & NOTES + 2 Projects |
+| **bob** | 5 | TODO_WRITE, NOTES_WRITE, NOTES_READ, PROJECT_FIN, PROJECT_OPS | Write/Read for TODO & NOTES + 2 Projects |
+| **charlie** | 6 | TODO_ADMIN, NOTES_ADMIN, NOTES_WRITE, PROJECT_HR, PROJECT_FIN, PROJECT_OPS | Admin for TODO & NOTES + 3 Projects |
+| **diana** | 5 | TODO_ADMIN, NOTES_ADMIN, PROJECT_HR, PROJECT_FIN, PROJECT_SALES | Admin for TODO & NOTES + 3 Projects |
+
+## Group Summary
+
+### Operation Groups (Permission Levels)
+- **TODO_ADMIN** - 2 members (charlie, diana) - Full administrative access to TODO app
+- **TODO_WRITE** - 2 members (alice, bob) - Create and modify TODO tasks
+- **TODO_READ** - 1 member (alice) - View only access to TODO app
+- **NOTES_ADMIN** - 2 members (charlie, diana) - Full administrative access to NOTES app
+- **NOTES_WRITE** - 3 members (alice, bob, charlie) - Create and modify notes
+- **NOTES_READ** - 2 members (alice, bob) - View only access to NOTES app
+
+### Resource Groups (Projects)
+- **PROJECT_HR** - 3 members (alice, charlie, diana) - Human Resources Management
+- **PROJECT_FIN** - 3 members (bob, charlie, diana) - Finance Management
+- **PROJECT_OPS** - 2 members (bob, charlie) - Operations Management
+- **PROJECT_SALES** - 2 members (alice, diana) - Sales Management
+
+## Access Patterns
+
+### Highest Privileges
+- **charlie** & **diana**: Can perform admin operations on both TODO and NOTES apps across 3 projects
+
+### Standard Access
+- **alice**: Can write/read tasks, write/read notes, manage 2 projects (HR, Sales)
+- **bob**: Can write/read tasks and notes, manage 2 projects (Finance, Operations)
+
+### Multi-App Support
+- All users have access to both TODO and NOTES apps with varying permission levels
+- charlie has the broadest coverage with admin + write access across both apps
+</file>
+
+<file path="configuration/README.md">
+# Keycloak Configuration Reference
+
+This directory contains YAML configuration files for Keycloak setup.
+
+## Files
+
+- **`users.yaml`** – User accounts with credentials and attributes
+- **`groups.yaml`** – Group definitions and group membership (single source of truth for authorization)
+- **`clients.yaml`** – OAuth2 clients, scopes, and token exchange policies
+
+## clients.yaml Structure
+
+### Scopes
+
+OAuth2 scopes that define granular permissions:
+- `todo.read`, `todo.write`, `todo.admin` – TODO app scopes
+- `notes.read`, `notes.write`, `notes.admin` – NOTES app scopes
+- `profile`, `email` – Standard OpenID Connect scopes
+
+### Clients
+
+Three main clients are defined:
+
+#### 1. orchestrator-app
+- **Type**: Confidential client (has secret)
+- **Flow**: Authorization code + resource owner password
+- **Purpose**: Web UI that initiates login and performs token exchange
+- **Client ID**: `orchestrator-app`
+- **Client Secret**: `orchestrator-secret`
+- **Token Exchange**: Can exchange tokens for `todo-app` and `notes-app` audiences
+
+#### 2. todo-app
+- **Type**: Bearer-only client (cannot request tokens directly)
+- **Purpose**: Resource server that validates Bearer tokens
+- **Client ID**: `todo-app`
+- **Client Secret**: `todo-app-secret`
+- **Audience**: `todo-app` (used in token exchange target)
+
+#### 3. notes-app
+- **Type**: Bearer-only client (cannot request tokens directly)
+- **Purpose**: Resource server that validates Bearer tokens
+- **Client ID**: `notes-app`
+- **Client Secret**: `notes-app-secret`
+- **Audience**: `notes-app` (used in token exchange target)
+
+### Protocol Mappers
+
+Each client has mappers that add claims to issued tokens:
+- `username` (preferred_username) – Extracted from user attributes
+- `email` – User email address
+- `groups` – Array of group names user belongs to (multi-valued)
+- `audience` – Identifies the resource server
+
+### Token Exchange Policies
+
+Defines which clients can exchange tokens for which audiences:
+- `orchestrator-app` can exchange tokens targeting `todo-app` and `notes-app`
+- Uses OAuth2 token exchange grant type: `urn:ietf:params:oauth:grant-type:token-exchange`
+
+### Client Roles
+
+Hierarchical roles for fine-grained access control:
+- **Realm roles**: Assigned at realm level
+- **Client roles**: Scoped to specific clients
+  - `orchestrator` (orchestrator-app)
+  - `todo-admin`, `todo-user` (todo-app)
+  - `notes-admin`, `notes-user` (notes-app)
+
+### Service Account Roles
+
+Service accounts are used when a client needs to act on its own behalf:
+- `orchestrator-app` service account is assigned `todo-user` and `notes-user` roles
+
+## Setup Steps
+
+### Manual Setup in Keycloak Admin Console
+
+1. **Create Scopes** (Realm > Client Scopes)
+   - Add all scopes defined in `clients.yaml`
+
+2. **Create Clients** (Realm > Clients)
+   - Create `orchestrator-app` (Confidential, Authorization Code grant)
+   - Create `todo-app` (Bearer only)
+   - Create `notes-app` (Bearer only)
+
+3. **Configure Protocol Mappers**
+   - For each client, add mappers as defined in config
+   - Ensure `username`, `email`, `groups` claims are mapped
+
+4. **Enable Token Exchange**
+   - For `orchestrator-app`: Realm > Token Exchange
+   - Add permission: `orchestrator-app` can exchange for `todo-app` and `notes-app`
+
+5. **Assign Client Roles**
+   - Assign client roles to users or service accounts
+
+### Important Notes
+
+- Resource servers (`todo-app`, `notes-app`) must accept Bearer tokens with:
+  - `preferred_username` claim for user identification
+  - `groups` claim (array) for authorization
+  - `audience` claim matching their client ID
+
+- The orchestrator performs token exchange with grant type:
+  ```
+  urn:ietf:params:oauth:grant-type:token-exchange
+  ```
+
+- Exchanged tokens will have the `audience` claim set to the target resource server
+
+## Token Flow
+
+```
+1. User logs in via orchestrator (password grant)
+   → Receives access_token (audience: orchestrator-app)
+
+2. Orchestrator exchanges token
+   → POST to /token with token-exchange grant
+   → Receives exchanged_token (audience: todo-app or notes-app)
+
+3. Orchestrator sends exchanged_token to resource server
+   → Authorization: Bearer <exchanged_token>
+   → Resource server validates audience and extracts username
+```
+
+## Environment Variables
+
+None required for this file; clients.yaml is a reference definition.
+
+In production, use Keycloak Admin REST API or Keycloak Operator to automate client provisioning based on this YAML.
+</file>
+
+<file path="configuration/users.yaml">
+users:
+  - username: alice
+    email: alice@example.com
+    firstName: Alice
+    lastName: Smith
+    enabled: true
+    emailVerified: true
+    credentials:
+      - type: password
+        value: alice123
+        temporary: false
+
+  - username: bob
+    email: bob@example.com
+    firstName: Bob
+    lastName: Johnson
+    enabled: true
+    emailVerified: true
+    credentials:
+      - type: password
+        value: bob123
+        temporary: false
+
+  - username: charlie
+    email: charlie@example.com
+    firstName: Charlie
+    lastName: Brown
+    enabled: true
+    emailVerified: true
+    credentials:
+      - type: password
+        value: charlie123
+        temporary: false
+
+  - username: diana
+    email: diana@example.com
+    firstName: Diana
+    lastName: Prince
+    enabled: true
+    emailVerified: true
+    credentials:
+      - type: password
+        value: diana123
+        temporary: false
+</file>
+
+<file path="docker-compose.yml">
+name: iam-project
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: password
+    networks:
+      - keycloak_network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: password
+      # Dane do pierwszego logowania (Admin Console)
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Obsługa HTTP (dla testów lokalnych)
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+    networks:
+      - keycloak_network
+      - shared-network
+
+networks:
+  keycloak_network:
+    driver: bridge
+    name: keycloak_network
+  shared-network:
+    driver: bridge
+    name: shared-network
+
+volumes:
+  postgres_data:
+</file>
+
+<file path="keycloak-admin-cli.sh">
+#!/bin/bash
+
+# Keycloak Admin CLI Helper Functions
+# Provides utilities for interacting with Keycloak Admin REST API
+
+set -euo pipefail
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Default values
+KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8080}"
+KEYCLOAK_REALM="${KEYCLOAK_REALM:-master}"
+KEYCLOAK_ADMIN_USER="${KEYCLOAK_ADMIN_USER:-admin}"
+KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
+
+# Global variable to store access token
+ACCESS_TOKEN=""
+
+# Logging functions
+log_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+# Get access token using admin credentials
+get_access_token() {
+    local response
+    
+    log_info "Authenticating with Keycloak..."
+    
+    response=$(curl -s -X POST \
+        "${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/token" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "grant_type=password" \
+        -d "client_id=admin-cli" \
+        -d "username=${KEYCLOAK_ADMIN_USER}" \
+        -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+        2>/dev/null)
+    
+    ACCESS_TOKEN=$(echo "$response" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Failed to obtain access token. Check credentials and Keycloak availability."
+        return 1
+    fi
+    
+    log_info "Authentication successful"
+    return 0
+}
+
+# Create a new user
+# Usage: create_user <username> <email> <firstName> <lastName> <password> [enabled]
+create_user() {
+    local username="$1"
+    local email="$2"
+    local firstName="$3"
+    local lastName="$4"
+    local password="$5"
+    local enabled="${6:-true}"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    # Check if user already exists
+    local user_id
+    user_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users?username=${username}" \
+        2>/dev/null | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+    
+    if [ -n "$user_id" ]; then
+        log_warning "User '${username}' already exists (ID: ${user_id})"
+        return 0
+    fi
+    
+    log_info "Creating user '${username}'..."
+    
+    local user_json
+    user_json=$(cat <<EOF
+{
+    "username": "${username}",
+    "email": "${email}",
+    "firstName": "${firstName}",
+    "lastName": "${lastName}",
+    "enabled": ${enabled},
+    "emailVerified": true,
+    "credentials": [
+        {
+            "type": "password",
+            "value": "${password}",
+            "temporary": false
+        }
+    ]
+}
+EOF
+)
+    
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$user_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users" \
+        2>/dev/null)
+    
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [ "$http_code" == "201" ]; then
+        log_info "User '${username}' created successfully"
+        return 0
+    else
+        log_error "Failed to create user '${username}' (HTTP ${http_code})"
+        echo "$response" | head -n-1
+        return 1
+    fi
+}
+
+# Get user ID by username
+get_user_id() {
+    local username="$1"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    local user_id
+    user_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users?username=${username}" \
+        2>/dev/null | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+    
+    if [ -n "$user_id" ]; then
+        echo "$user_id"
+        return 0
+    else
+        log_error "User '${username}' not found"
+        return 1
+    fi
+}
+
+# Create a new group
+# Usage: create_group <groupName> <description>
+create_group() {
+    local group_name="$1"
+    local description="${2:-}"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    # Check if group already exists
+    local group_id
+    group_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/groups?search=${group_name}" \
+        2>/dev/null | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+    
+    if [ -n "$group_id" ]; then
+        log_warning "Group '${group_name}' already exists (ID: ${group_id})"
+        return 0
+    fi
+    
+    log_info "Creating group '${group_name}'..."
+    
+    local group_json
+    group_json=$(cat <<EOF
+{
+    "name": "${group_name}",
+    "attributes": {
+        "description": ["${description}"]
+    }
+}
+EOF
+)
+    
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$group_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/groups" \
+        2>/dev/null)
+    
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [ "$http_code" == "201" ]; then
+        log_info "Group '${group_name}' created successfully"
+        return 0
+    else
+        log_error "Failed to create group '${group_name}' (HTTP ${http_code})"
+        echo "$response" | head -n-1
+        return 1
+    fi
+}
+
+# Get group ID by group name
+get_group_id() {
+    local group_name="$1"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    local group_id
+    group_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/groups?search=${group_name}&exact=true" \
+        2>/dev/null | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+    
+    if [ -n "$group_id" ]; then
+        echo "$group_id"
+        return 0
+    else
+        log_error "Group '${group_name}' not found"
+        return 1
+    fi
+}
+
+# Add user to group
+# Usage: add_user_to_group <username> <group_name>
+add_user_to_group() {
+    local username="$1"
+    local group_name="$2"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    local user_id
+    user_id=$(get_user_id "$username") || return 1
+    
+    local group_id
+    group_id=$(get_group_id "$group_name") || return 1
+    
+    log_info "Adding user '${username}' to group '${group_name}'..."
+    
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users/${user_id}/groups/${group_id}" \
+        2>/dev/null)
+    
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [ "$http_code" == "204" ]; then
+        log_info "User '${username}' added to group '${group_name}' successfully"
+        return 0
+    else
+        log_error "Failed to add user '${username}' to group '${group_name}' (HTTP ${http_code})"
+        return 1
+    fi
+}
+
+# Set user attributes
+# Usage: set_user_attributes <username> <key1>:<value1> [<key2>:<value2> ...]
+set_user_attributes() {
+    local username="$1"
+    shift
+    local attributes=("$@")
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    local user_id
+    user_id=$(get_user_id "$username") || return 1
+    
+    local attributes_json="{}"
+    for attr in "${attributes[@]}"; do
+        local key="${attr%%:*}"
+        local value="${attr#*:}"
+        attributes_json=$(echo "$attributes_json" | jq --arg k "$key" --arg v "$value" '.[$k] = [$v]')
+    done
+    
+    log_info "Setting attributes for user '${username}'..."
+    
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"attributes\": $attributes_json}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users/${user_id}" \
+        2>/dev/null)
+    
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [ "$http_code" == "204" ]; then
+        log_info "Attributes set for user '${username}' successfully"
+        return 0
+    else
+        log_error "Failed to set attributes for user '${username}' (HTTP ${http_code})"
+        return 1
+    fi
+}
+
+# Create a client scope
+# Usage: create_client_scope <name> <description> <protocol>
+create_client_scope() {
+    local name="$1"
+    local description="$2"
+    local protocol="${3:-openid-connect}"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    # Check if scope already exists
+    local scope_id
+    scope_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/client-scopes" \
+        2>/dev/null | jq -r ".[] | select(.name==\"$name\") | .id")
+        
+    if [ -n "$scope_id" ] && [ "$scope_id" != "null" ]; then
+        log_warning "Client scope '${name}' already exists (ID: ${scope_id})"
+        return 0
+    fi
+    
+    log_info "Creating client scope '${name}'..."
+    
+    local scope_json
+    scope_json=$(jq -a -cn \
+        --arg name "$name" \
+        --arg description "$description" \
+        --arg protocol "$protocol" \
+        '{
+            name: $name,
+            description: $description,
+            protocol: $protocol
+        }')
+    
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$scope_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/client-scopes" \
+        2>/dev/null)
+        
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [ "$http_code" == "201" ]; then
+        log_info "Client scope '${name}' created successfully"
+        return 0
+    else
+        log_error "Failed to create client scope '${name}' (HTTP ${http_code})"
+        return 1
+    fi
+}
+
+# Create a client
+# Usage: create_client <client_id> <secret> <description> <public> <standard_flow> <direct_access> <service_accounts> <redirect_uris_json> <web_origins_json>
+create_client() {
+    local client_id="$1"
+    local secret="$2"
+    local description="$3"
+    local public="${4:-false}"
+    local standard_flow="${5:-true}"
+    local direct_access="${6:-true}"
+    local service_accounts="${7:-false}"
+    local redirects="${8:-[]}"
+    local web_origins="${9:-[]}"
+    
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+    
+    # Check if client already exists
+    local existing_id
+    existing_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${client_id}" \
+        2>/dev/null | jq -r '.[0].id')
+        
+    if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+        log_warning "Client '${client_id}' already exists"
+        return 0
+    fi
+    
+    log_info "Creating client '${client_id}'..."
+    
+    # Validate/normalize JSON array inputs to avoid malformed payloads.
+    local redirects_json web_origins_json
+    redirects_json=$(echo "$redirects" | jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo "[]")
+    web_origins_json=$(echo "$web_origins" | jq -c 'if type == "array" then . else [] end' 2>/dev/null || echo "[]")
+
+    local client_json
+    client_json=$(jq -a -cn \
+        --arg clientId "$client_id" \
+        --arg secret "$secret" \
+        --arg description "$description" \
+        --argjson publicClient "$public" \
+        --argjson standardFlowEnabled "$standard_flow" \
+        --argjson directAccessGrantsEnabled "$direct_access" \
+        --argjson serviceAccountsEnabled "$service_accounts" \
+        --argjson redirectUris "$redirects_json" \
+        --argjson webOrigins "$web_origins_json" \
+        '{
+            clientId: $clientId,
+            secret: $secret,
+            description: $description,
+            publicClient: $publicClient,
+            standardFlowEnabled: $standardFlowEnabled,
+            directAccessGrantsEnabled: $directAccessGrantsEnabled,
+            serviceAccountsEnabled: $serviceAccountsEnabled,
+            clientAuthenticatorType: "client-secret",
+            redirectUris: $redirectUris,
+            webOrigins: $webOrigins
+        }')
+    
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$client_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients" \
+        2>/dev/null)
+        
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [ "$http_code" == "201" ]; then
+        log_info "Client '${client_id}' created successfully"
+        log_info "✓ Client Credentials:"
+        log_info "  - Client ID: ${client_id}"
+        log_info "  - Client Secret: ${secret}"
+        return 0
+    else
+        local response_body
+        response_body=$(echo "$response" | sed '$d')
+        log_error "Failed to create client '${client_id}' (HTTP ${http_code})"
+        [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+        log_error "Request payload: ${client_json}"
+        return 1
+    fi
+}
+
+# Get internal Keycloak client UUID by public clientId
+get_client_internal_id() {
+    local client_id="$1"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${client_id}" \
+        2>/dev/null | jq -r '.[0].id // empty')
+
+    if [ -n "$internal_id" ]; then
+        echo "$internal_id"
+        return 0
+    fi
+
+    log_error "Client '${client_id}' not found"
+    return 1
+}
+
+# Create a client role
+# Usage: create_client_role <client_id> <role_name> [description]
+create_client_role() {
+    local client_id="$1"
+    local role_name="$2"
+    local description="${3:-}"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    local exists_http_code
+    exists_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ "$exists_http_code" == "200" ]; then
+        log_warning "Role '${role_name}' already exists on client '${client_id}'"
+        return 0
+    fi
+
+    log_info "Creating role '${role_name}' on client '${client_id}'..."
+
+    local role_json
+    role_json=$(jq -a -cn \
+        --arg name "$role_name" \
+        --arg description "$description" \
+        '{name: $name, description: $description}')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$role_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/roles" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "201" ] || [ "$http_code" == "204" ]; then
+        log_info "Role '${role_name}' created on client '${client_id}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to create role '${role_name}' on client '${client_id}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Get service account user ID for a client with service accounts enabled
+# Usage: get_service_account_user_id <client_id>
+get_service_account_user_id() {
+    local client_id="$1"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    local user_id
+    user_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/service-account-user" \
+        2>/dev/null | jq -r '.id // empty')
+
+    if [ -n "$user_id" ]; then
+        echo "$user_id"
+        return 0
+    fi
+
+    log_error "Service account user not found for client '${client_id}'"
+    return 1
+}
+
+# Assign a realm role to a user by user ID
+# Usage: assign_realm_role_to_user_id <user_id> <realm_role_name>
+assign_realm_role_to_user_id() {
+    local user_id="$1"
+    local role_name="$2"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local role_json
+    role_json=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ -z "$role_json" ] || [ "$(echo "$role_json" | jq -r '.error // empty' 2>/dev/null)" != "" ]; then
+        log_error "Realm role '${role_name}' not found"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -a -cn --argjson role "$role_json" '[ $role ]')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users/${user_id}/role-mappings/realm" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Assigned realm role '${role_name}' to user '${user_id}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to assign realm role '${role_name}' to user '${user_id}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Assign a client role to a user by user ID
+# Usage: assign_client_role_to_user_id <user_id> <target_client_id> <role_name>
+assign_client_role_to_user_id() {
+    local user_id="$1"
+    local target_client_id="$2"
+    local role_name="$3"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local target_internal_id
+    target_internal_id=$(get_client_internal_id "$target_client_id") || return 1
+
+    local role_json
+    role_json=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${target_internal_id}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ -z "$role_json" ] || [ "$(echo "$role_json" | jq -r '.error // empty' 2>/dev/null)" != "" ]; then
+        log_error "Role '${role_name}' not found on client '${target_client_id}'"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -a -cn --argjson role "$role_json" '[ $role ]')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users/${user_id}/role-mappings/clients/${target_internal_id}" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Assigned client role '${role_name}' (${target_client_id}) to user '${user_id}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to assign client role '${role_name}' (${target_client_id}) to user '${user_id}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Assign a client role to a group
+# Usage: assign_client_role_to_group <group_name> <target_client_id> <role_name>
+assign_client_role_to_group() {
+    local group_name="$1"
+    local target_client_id="$2"
+    local role_name="$3"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local group_id
+    group_id=$(get_group_id "$group_name") || return 1
+
+    local target_internal_id
+    target_internal_id=$(get_client_internal_id "$target_client_id") || return 1
+
+    local role_json
+    role_json=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${target_internal_id}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ -z "$role_json" ] || [ "$(echo "$role_json" | jq -r '.error // empty' 2>/dev/null)" != "" ]; then
+        log_error "Role '${role_name}' not found on client '${target_client_id}'"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -a -cn --argjson role "$role_json" '[ $role ]')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/groups/${group_id}/role-mappings/clients/${target_internal_id}" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Assigned client role '${role_name}' (${target_client_id}) to group '${group_name}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to assign client role '${role_name}' (${target_client_id}) to group '${group_name}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+</file>
+
+<file path="readme.md">
+This instruction tell you how to setup training instance for Keycloak.
+
+1. Create a new Keycloak instance using the official Keycloak image from Docker Hub.
+
+```bash
+docker-compose -f resources/keycloack/docker-compose.yml up -d
+```
+
+2. Access the Keycloak admin console by navigating to `http://localhost:8080` in your web browser.
+
+3. Log in using the default admin credentials:
+   - Username: `admin`
+   - Password: `admin`
+
+## Bootstrap Users and Groups
+
+This directory includes scripts and YAML configuration files to automatically create users and groups in Keycloak.
+
+### Prerequisites
+
+Before running the bootstrap scripts, ensure you have the following tools installed:
+
+```bash
+# On macOS
+brew install curl yq jq
+
+# On Ubuntu/Debian
+sudo apt-get install curl jq
+sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+sudo chmod +x /usr/local/bin/yq
+
+# On Windows (with WSL)
+sudo apt-get install curl jq yq
+```
+
+### Files
+
+- **`users.yaml`** - Defines users to be created with their properties, credentials, and attributes
+- **`groups.yaml`** - Defines groups and which users belong to them
+- **`keycloak-admin-cli.sh`** - Helper script with functions to interact with Keycloak Admin REST API
+- **`bootstrap-keycloak.sh`** - Main orchestration script that reads YAML files and creates users and groups
+
+### Setup Steps
+
+1. **Start Keycloak** (if not already running):
+```bash
+docker-compose -f resources/keycloack/docker-compose.yml up -d
+```
+
+2. **Make scripts executable**:
+```bash
+chmod +x resources/keycloack/bootstrap-keycloak.sh
+chmod +x resources/keycloack/keycloak-admin-cli.sh
+```
+
+3. **Configure users** (optional):
+   - Edit `users.yaml` to add/modify users
+   - Edit `groups.yaml` to add/modify groups and their members
+
+4. **Run bootstrap script**:
+
+```bash
+# Using default configuration
+./resources/keycloack/bootstrap-keycloak.sh
+
+# With custom Keycloak URL
+./resources/keycloack/bootstrap-keycloak.sh -u http://keycloak.example.com:8080
+
+# With custom credentials
+./resources/keycloack/bootstrap-keycloak.sh -a admin_user -p admin_password
+
+# With custom YAML files
+./resources/keycloack/bootstrap-keycloak.sh --users-file /path/to/users.yaml --groups-file /path/to/groups.yaml
+```
+
+### Usage Examples
+
+#### Example 1: Bootstrap with default settings
+```bash
+cd resources/keycloack
+./bootstrap-keycloak.sh
+```
+
+#### Example 2: Bootstrap a specific realm
+```bash
+./bootstrap-keycloak.sh -r my-realm
+```
+
+#### Example 3: Bootstrap with all custom options
+```bash
+./bootstrap-keycloak.sh \
+  -u http://localhost:8080 \
+  -r master \
+  -a admin \
+  -p admin \
+  --users-file users.yaml \
+  --groups-file groups.yaml
+```
+
+### Configuration
+
+#### users.yaml Structure
+
+```yaml
+users:
+  - username: john_doe
+    email: john@example.com
+    firstName: John
+    lastName: Doe
+    enabled: true
+    emailVerified: true
+    credentials:
+      - type: password
+        value: secure_password_here
+        temporary: false
+    attributes:
+      department: Engineering
+      role: Developer
+```
+
+#### groups.yaml Structure
+
+```yaml
+groups:
+  - name: developers
+    description: Software developers group
+    members:
+      - john_doe
+      - jane_smith
+    attributes:
+      department: Engineering
+```
+
+### Keycloak Admin CLI Functions
+
+The `keycloak-admin-cli.sh` script provides the following functions:
+
+- `get_access_token()` - Authenticate and get access token
+- `create_user()` - Create a new user
+- `get_user_id()` - Get user ID by username
+- `create_group()` - Create a new group
+- `get_group_id()` - Get group ID by name
+- `add_user_to_group()` - Add user to group
+- `set_user_attributes()` - Set user attributes
+
+You can use these functions in your own scripts or automation tools.
+
+### Troubleshooting
+
+**Issue**: "curl: command not found"
+- Solution: Install curl - `apt-get install curl` (Debian/Ubuntu) or `brew install curl` (macOS)
+
+**Issue**: "jq: command not found"
+- Solution: Install jq - `apt-get install jq` (Debian/Ubuntu) or `brew install jq` (macOS)
+
+**Issue**: "yq: command not found"
+- Solution: Install yq - See prerequisites section above
+
+**Issue**: "Failed to obtain access token"
+- Solution: Check that Keycloak is running and credentials are correct
+
+**Issue**: "Keycloak is not accessible"
+- Solution: Verify Keycloak URL and that the container is running (`docker ps`)
+
+### API Reference
+
+The scripts use Keycloak's Admin REST API. For more information:
+- [Keycloak Admin REST API Documentation](https://www.keycloak.org/docs-api/latest/rest-api/)
+- [Keycloak Documentation](https://www.keycloak.org/documentation)
+</file>
+
+</files>

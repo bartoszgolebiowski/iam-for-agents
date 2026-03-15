@@ -63,6 +63,7 @@ clients:
     directAccessGrantsEnabled: true     # Resource Owner Password grant (for testing)
     implicitFlowEnabled: false
     serviceAccountsEnabled: true        # Needed for client-level token exchange permissions
+    tokenExchangeEnabled: true          # Enable Standard Token Exchange for this client
 
     redirectUris:
       - "http://localhost:3003/*"
