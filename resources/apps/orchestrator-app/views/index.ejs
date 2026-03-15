@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title><%= title %></title>
+  <style>
+    body { 
+      font-family: Segoe UI, Tahoma, sans-serif; 
+      margin: 24px; 
+      background: #f6f8fb; 
+      color: #14213d; 
+    }
+    .grid { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); 
+      gap: 16px; 
+    }
+    .card { 
+      background: #fff; 
+      border-radius: 10px; 
+      padding: 16px; 
+      box-shadow: 0 8px 24px rgba(20,33,61,.08); 
+    }
+    h1 { margin-top: 0; }
+    h2 { font-size: 1.2em; margin-bottom: 12px; }
+    label { 
+      display: block; 
+      margin-bottom: 8px; 
+      font-weight: 600; 
+    }
+    input, button, select { 
+      width: 100%; 
+      padding: 10px; 
+      margin-bottom: 10px; 
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button { 
+      background: #0d6efd; 
+      color: #fff; 
+      border: none; 
+      border-radius: 6px; 
+      cursor: pointer; 
+    }
+    button:hover { background: #0b5ed7; }
+    pre { 
+      background: #0e1a2b; 
+      color: #d2f0ff; 
+      padding: 12px; 
+      border-radius: 8px; 
+      overflow-x: auto; 
+      font-size: 12px;
+    }
+    .error { 
+      color: #b00020; 
+      font-weight: 600; 
+    }
+    .token-display {
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      background: #f0f0f0;
+      padding: 8px;
+      border-radius: 4px;
+      margin-top: 8px;
+    }
+    .status-success { color: #28a745; }
+    .status-info { color: #17a2b8; }
+  </style>
+</head>
+<body>
+  <h1><%= title %></h1>
+  <p>Current user: <strong><%= username %></strong></p>
+  
+  <div class="grid">
+    <!-- Section 1: Login -->
+    <section class="card">
+      <h2>1. Login Against Keycloak</h2>
+      <form method="post" action="/login">
+        <label>Username</label>
+        <input name="username" required />
+        <label>Password</label>
+        <input type="password" name="password" required />
+        <button type="submit">Login and Collect Token</button>
+      </form>
+      <% if (sessions.accessToken) { %>
+        <p class="status-success">✓ Access token collected</p>
+        <div class="token-display"><%= maskToken(sessions.accessToken) %></div>
+      <% } else { %>
+        <p class="status-info">No token yet</p>
+      <% } %>
+    </section>
+
+    <!-- Section 2: Token Exchange for NOTES App -->
+    <section class="card">
+      <h2>2. Exchange Token For NOTES App</h2>
+      <form method="post" action="/exchange">
+        <input type="hidden" name="audience" value="notes-app" />
+        <button type="submit">Exchange for NOTES App</button>
+      </form>
+      <% if (sessions.exchangedNotesToken) { %>
+        <p class="status-success">✓ Token exchanged for NOTES</p>
+        <div class="token-display"><%= maskToken(sessions.exchangedNotesToken) %></div>
+      <% } else { %>
+        <p class="status-info">Not exchanged yet</p>
+      <% } %>
+    </section>
+
+    <!-- Section 3: Token Exchange for TODO App -->
+    <section class="card">
+      <h2>3. Exchange Token For TODO App</h2>
+      <form method="post" action="/exchange">
+        <input type="hidden" name="audience" value="todo-app" />
+        <button type="submit">Exchange for TODO App</button>
+      </form>
+      <% if (sessions.exchangedTodoToken) { %>
+        <p class="status-success">✓ Token exchanged for TODO</p>
+        <div class="token-display"><%= maskToken(sessions.exchangedTodoToken) %></div>
+      <% } else { %>
+        <p class="status-info">Not exchanged yet</p>
+      <% } %>
+    </section>
+
+    <!-- Section 4: Get Data From NOTES App -->
+    <section class="card">
+      <h2>4. Get Data From NOTES App</h2>
+      <form method="post" action="/notes-data">
+        <label>Project ID (optional)</label>
+        <input type="number" min="1" name="projectId" />
+        <button type="submit">Get Notes Data</button>
+      </form>
+      <p>This sends Bearer token to NOTES API.</p>
+    </section>
+
+    <!-- Section 5: Get Data From TODO App -->
+    <section class="card">
+      <h2>5. Get Data From TODO App</h2>
+      <form method="post" action="/todos-data">
+        <label>Project ID (optional)</label>
+        <input type="number" min="1" name="projectId" />
+        <button type="submit">Get TODO Data</button>
+      </form>
+      <p>This sends Bearer token to TODO API.</p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Latest NOTES Response</h2>
+    <pre><%= JSON.stringify(sessions.notesPayload, null, 2) %></pre>
+  </section>
+
+  <section class="card">
+    <h2>Latest TODO Response</h2>
+    <pre><%= JSON.stringify(sessions.todoPayload, null, 2) %></pre>
+  </section>
+
+  <% if (sessions.lastError) { %>
+    <section class="card">
+      <h2>Status</h2>
+      <p class="error"><%= sessions.lastError %></p>
+    </section>
+  <% } %>
+</body>
+</html>

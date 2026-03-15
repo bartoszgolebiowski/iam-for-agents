@@ -1,3 +1,4 @@
+name: iam-project
 version: '3.8'
 
 services:
@@ -32,10 +33,15 @@ services:
       - postgres
     networks:
       - keycloak_network
+      - shared-network
 
 networks:
   keycloak_network:
     driver: bridge
+    name: keycloak_network
+  shared-network:
+    driver: bridge
+    name: shared-network
 
 volumes:
   postgres_data:

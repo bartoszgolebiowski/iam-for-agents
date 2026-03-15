@@ -441,6 +441,9 @@ create_client() {
     
     if [ "$http_code" == "201" ]; then
         log_info "Client '${client_id}' created successfully"
+        log_info "✓ Client Credentials:"
+        log_info "  - Client ID: ${client_id}"
+        log_info "  - Client Secret: ${secret}"
         return 0
     else
         local response_body

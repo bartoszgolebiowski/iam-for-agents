@@ -6,7 +6,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src ./src
-RUN mkdir -p /app/config
+COPY config ./config
 
 EXPOSE 3002
 

@@ -1,36 +1,49 @@
+name: iam-project
 services:
   orchestrator-app:
     build:
       context: ./orchestrator-app
-    container_name: orchestrator-app
+    env_file:
+      - .env
     ports:
       - "3003:3003"
     environment:
       PORT: 3003
-      ORCH_CONFIG_FILE: /app/config/orchestrator.yaml
+      KEYCLOAK_URL: ${KEYCLOAK_URL:-http://keycloak:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-master}
+      ORCHESTRATOR_CLIENT_ID: ${ORCHESTRATOR_CLIENT_ID}
+      ORCHESTRATOR_CLIENT_SECRET: ${ORCHESTRATOR_CLIENT_SECRET}
+      NOTES_AUDIENCE: ${NOTES_AUDIENCE}
+      NOTES_API_URL: ${NOTES_API_URL:-http://notes-app:3002}
+      TODO_API_URL: ${TODO_API_URL:-http://todo-app:3001}
+      UI_TITLE: ${UI_TITLE:-Orchestrator}
     depends_on:
       - notes-app
+      - todo-app
+    networks:
+      - shared-network
 
   todo-app:
     build:
       context: ./todo-app
-    container_name: todo-app
     ports:
       - "3001:3001"
     environment:
       PORT: 3001
-      GROUPS_FILE: /app/config/groups.yaml
-    volumes:
-      - ../keycloack/configuration/groups.yaml:/app/config/groups.yaml:ro
+    networks:
+      - shared-network
 
   notes-app:
     build:
       context: ./notes-app
-    container_name: notes-app
     ports:
       - "3002:3002"
     environment:
       PORT: 3002
-      GROUPS_FILE: /app/config/groups.yaml
-    volumes:
-      - ../keycloack/configuration/groups.yaml:/app/config/groups.yaml:ro
+    networks:
+      - shared-network
+
+networks:
+  shared-network:
+    external: true
+    name: shared-network

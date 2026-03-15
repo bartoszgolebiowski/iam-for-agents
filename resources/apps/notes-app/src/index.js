@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json());
 
 const port = process.env.PORT || 3002;
-const groupsFile = process.env.GROUPS_FILE || path.join(__dirname, '..', 'config', 'groups.yaml');
+const groupsFile = path.join(__dirname, '..', 'config', 'groups.yaml');
 
 function loadGroupsConfig(filePath) {
   const raw = fs.readFileSync(filePath, 'utf8');

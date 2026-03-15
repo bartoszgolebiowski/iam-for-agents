@@ -6,7 +6,7 @@ COPY package.json ./
 RUN npm install --omit=dev
 
 COPY src ./src
-COPY config ./config
+COPY views ./views
 
 EXPOSE 3003
 
