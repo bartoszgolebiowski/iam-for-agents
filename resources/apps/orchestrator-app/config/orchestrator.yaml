@@ -1,0 +1,17 @@
+keycloak:
+  url: http://host.docker.internal:8080
+  realm: master
+  tokenEndpoint: /realms/master/protocol/openid-connect/token
+clients:
+  orchestrator:
+    clientId: orchestrator-app
+    clientSecret: orchestrator-secret
+  notes:
+    audience: notes-app
+  todo:
+    audience: todo-app
+services:
+  notesApiBaseUrl: http://notes-app:3002
+  todoApiBaseUrl: http://todo-app:3001
+ui:
+  title: Demo IAM Orchestrator

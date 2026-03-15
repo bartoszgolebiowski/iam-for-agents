@@ -1,0 +1,13 @@
+{
+  "name": "notes-app",
+  "version": "1.0.0",
+  "description": "Basic notes CRUD app with YAML authorization",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "js-yaml": "^4.1.0"
+  }
+}

@@ -1,0 +1,36 @@
+services:
+  orchestrator-app:
+    build:
+      context: ./orchestrator-app
+    container_name: orchestrator-app
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      ORCH_CONFIG_FILE: /app/config/orchestrator.yaml
+    depends_on:
+      - notes-app
+
+  todo-app:
+    build:
+      context: ./todo-app
+    container_name: todo-app
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      GROUPS_FILE: /app/config/groups.yaml
+    volumes:
+      - ../keycloack/configuration/groups.yaml:/app/config/groups.yaml:ro
+
+  notes-app:
+    build:
+      context: ./notes-app
+    container_name: notes-app
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      GROUPS_FILE: /app/config/groups.yaml
+    volumes:
+      - ../keycloack/configuration/groups.yaml:/app/config/groups.yaml:ro

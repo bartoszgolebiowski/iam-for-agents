@@ -1,0 +1,351 @@
+# Keycloak Clients, Scopes, and Token Exchange Configuration
+#
+# Flow:
+#   1. User logs in via orchestrator-app (password grant or authorization code)
+#      → Keycloak returns id_token + access_token (audience: orchestrator-app)
+#   2. Orchestrator exchanges access_token for a new token scoped to todo-app or notes-app
+#      → POST /token with grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+#      → Receives exchanged access_token (audience: todo-app or notes-app)
+#   3. Orchestrator calls resource server API with exchanged token
+#      → Authorization: Bearer <exchanged_token>
+#      → Resource server reads preferred_username + groups from JWT claims
+
+realm:
+  name: master
+  accessTokenLifespan: 3600
+  refreshTokenLifespan: 86400
+  features:
+    tokenExchange: enabled        # Must be enabled at realm level (Preview feature)
+    adminFineGrainedAuthz: enabled # Required for token exchange permissions
+
+# ---------------------------------------------------------------------------
+# Custom Client Scopes
+# ---------------------------------------------------------------------------
+# Note: openid, profile, email are Keycloak built-in scopes — do NOT redefine them.
+# Only custom application-specific scopes are listed here.
+scopes:
+  - id: todo.read
+    name: todo.read
+    description: Permission to read TODO tasks and projects
+    protocol: openid-connect
+
+  - id: todo.write
+    name: todo.write
+    description: Permission to create and modify TODO tasks
+    protocol: openid-connect
+
+  - id: notes.read
+    name: notes.read
+    description: Permission to read notes and projects
+    protocol: openid-connect
+
+  - id: notes.write
+    name: notes.write
+    description: Permission to create and modify notes
+    protocol: openid-connect
+
+# ---------------------------------------------------------------------------
+# Clients
+# ---------------------------------------------------------------------------
+clients:
+
+  # =========================================================================
+  # Orchestrator – the only client that users log in to.
+  # Collects id_token + access_token, then exchanges for app-specific tokens.
+  # =========================================================================
+  orchestrator-app:
+    clientId: orchestrator-app
+    clientSecret: orchestrator-secret
+    description: Orchestrator UI – login, token exchange, delegate to resource servers
+    clientAuthenticatorType: client-secret
+    public: false
+    standardFlowEnabled: true           # Authorization Code flow (browser login)
+    directAccessGrantsEnabled: true     # Resource Owner Password grant (for testing)
+    implicitFlowEnabled: false
+    serviceAccountsEnabled: true        # Needed for client-level token exchange permissions
+
+    redirectUris:
+      - "http://localhost:3003/*"
+      - "http://orchestrator-app:3003/*"
+
+    webOrigins:
+      - "http://localhost:3003"
+      - "http://orchestrator-app:3003"
+
+    defaultClientScopes:
+      - openid      # built-in — required to receive id_token
+      - profile     # built-in — preferred_username, name, etc.
+      - email       # built-in — email claim
+
+    optionalClientScopes:
+      - todo.read
+      - todo.write
+      - notes.read
+      - notes.write
+
+    protocolMappers:
+      # Audience mappers — ensure exchanged tokens carry the right "aud"
+      - name: todo-app-audience
+        protocolMapper: oidc-audience-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          included.client.audience: todo-app
+          id.token.claim: "false"
+          access.token.claim: "true"
+          introspection.token.claim: "true"
+
+      - name: notes-app-audience
+        protocolMapper: oidc-audience-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          included.client.audience: notes-app
+          id.token.claim: "false"
+          access.token.claim: "true"
+          introspection.token.claim: "true"
+
+      # Resolve audience from roles (fallback)
+      - name: audience-resolve
+        protocolMapper: oidc-audience-resolve-mapper
+        protocol: openid-connect
+        consentRequired: false
+
+      # Group membership claim
+      - name: groups
+        protocolMapper: oidc-group-membership-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          claim.name: groups
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+  # =========================================================================
+  # TODO App – resource server (bearer-token consumer).
+  # Does NOT log users in; only validates tokens issued via token exchange.
+  # =========================================================================
+  todo-app:
+    clientId: todo-app
+    clientSecret: todo-app-secret
+    description: TODO application resource server
+    clientAuthenticatorType: client-secret
+    public: false
+    standardFlowEnabled: false
+    directAccessGrantsEnabled: false
+    implicitFlowEnabled: false
+    serviceAccountsEnabled: false
+
+    # Fine-grained permissions must be enabled on this client
+    # so orchestrator-app can exchange tokens targeting it.
+    authorizationServicesEnabled: false
+    permissionsEnabled: true
+
+    defaultClientScopes:
+      - openid
+      - profile
+      - email
+
+    optionalClientScopes:
+      - todo.read
+      - todo.write
+
+    protocolMappers:
+      - name: username
+        protocolMapper: oidc-usermodel-property-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          user.attribute: username
+          claim.name: preferred_username
+          jsonType.label: String
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+      # Map Keycloak group memberships into token "groups" claim
+      - name: groups
+        protocolMapper: oidc-group-membership-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          claim.name: groups
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+  # =========================================================================
+  # NOTES App – resource server (bearer-token consumer).
+  # Does NOT log users in; only validates tokens issued via token exchange.
+  # =========================================================================
+  notes-app:
+    clientId: notes-app
+    clientSecret: notes-app-secret
+    description: NOTES application resource server
+    clientAuthenticatorType: client-secret
+    public: false
+    standardFlowEnabled: false
+    directAccessGrantsEnabled: false
+    implicitFlowEnabled: false
+    serviceAccountsEnabled: false
+
+    authorizationServicesEnabled: false
+    permissionsEnabled: true
+
+    defaultClientScopes:
+      - openid
+      - profile
+      - email
+
+    optionalClientScopes:
+      - notes.read
+      - notes.write
+
+    protocolMappers:
+      - name: username
+        protocolMapper: oidc-usermodel-property-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          user.attribute: username
+          claim.name: preferred_username
+          jsonType.label: String
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+      - name: groups
+        protocolMapper: oidc-group-membership-mapper
+        protocol: openid-connect
+        consentRequired: false
+        config:
+          claim.name: groups
+          full.path: "false"
+          id.token.claim: "true"
+          access.token.claim: "true"
+          userinfo.token.claim: "true"
+
+# ---------------------------------------------------------------------------
+# Token Exchange Permissions
+# ---------------------------------------------------------------------------
+# Keycloak controls token exchange via fine-grained permissions on the TARGET
+# client. You must enable "Permissions" on the target client, then create a
+# policy that allows the SOURCE client's service account to exchange.
+#
+# Steps in Keycloak Admin Console:
+#
+#   For each target client (todo-app, notes-app):
+#     1. Go to Clients → <target-client> → Permissions → Enable
+#     2. Click "token-exchange" permission
+#     3. Create a "Client" policy:
+#        - Name: allow-orchestrator-exchange
+#        - Clients: orchestrator-app
+#        - Logic: Positive
+#     4. Assign this policy to the "token-exchange" permission
+#
+# Token exchange request (orchestrator → target):
+#   POST /realms/master/protocol/openid-connect/token
+#   Content-Type: application/x-www-form-urlencoded
+#
+#   grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+#   client_id=orchestrator-app
+#   client_secret=orchestrator-secret
+#   subject_token=<user_access_token>
+#   subject_token_type=urn:ietf:params:oauth:token-type:access_token
+#   requested_token_type=urn:ietf:params:oauth:token-type:access_token
+#   audience=<todo-app | notes-app>
+
+tokenExchange:
+  sourceClient: orchestrator-app
+  targetClients:
+    - clientId: todo-app
+      permission: token-exchange
+      policy:
+        name: allow-orchestrator-exchange
+        type: client
+        clients:
+          - orchestrator-app
+        logic: positive
+
+    - clientId: notes-app
+      permission: token-exchange
+      policy:
+        name: allow-orchestrator-exchange
+        type: client
+        clients:
+          - orchestrator-app
+        logic: positive
+
+# ---------------------------------------------------------------------------
+# Client Roles
+# ---------------------------------------------------------------------------
+# Project roles follow the pattern: <APP>_PROJECT_<CODE>_<LEVEL>
+# They mirror the resource groups defined in groups.yaml (PROJECT_HR, PROJECT_FIN, etc.)
+clientRoles:
+  orchestrator-app:
+    - name: orchestrator
+      description: Orchestrator service account role
+
+  todo-app:
+    # Operation-level roles
+    - name: todo_writer
+      description: Create and modify TODO tasks
+    - name: todo_reader
+      description: Read-only access to TODO tasks
+
+    # Project-scoped roles – mirror groups.yaml PROJECT_* groups
+    - name: todo_project_hr
+      description: Access to HR project in TODO app (mirrors PROJECT_HR)
+    - name: todo_project_fin
+      description: Access to Finance project in TODO app (mirrors PROJECT_FIN)
+    - name: todo_project_ops
+      description: Access to Operations project in TODO app (mirrors PROJECT_OPS)
+    - name: todo_project_sales
+      description: Access to Sales project in TODO app (mirrors PROJECT_SALES)
+
+  notes-app:
+    # Operation-level roles
+    - name: notes_writer
+      description: Create and modify notes
+    - name: notes_reader
+      description: Read-only access to notes
+
+    # Project-scoped roles – mirror groups.yaml PROJECT_* groups
+    - name: notes_project_hr
+      description: Access to HR project in NOTES app (mirrors PROJECT_HR)
+    - name: notes_project_fin
+      description: Access to Finance project in NOTES app (mirrors PROJECT_FIN)
+    - name: notes_project_ops
+      description: Access to Operations project in NOTES app (mirrors PROJECT_OPS)
+    - name: notes_project_sales
+      description: Access to Sales project in NOTES app (mirrors PROJECT_SALES)
+
+# ---------------------------------------------------------------------------
+# Service Account Role Assignments
+# ---------------------------------------------------------------------------
+# The orchestrator service account is granted all project roles on both apps
+# so it can perform token exchange on behalf of any logged-in user.
+serviceAccountRoles:
+  orchestrator-app:
+    realmRoles:
+      - default-roles-master
+    clientRoles:
+      - client: todo-app
+        role: todo_project_hr
+      - client: todo-app
+        role: todo_project_fin
+      - client: todo-app
+        role: todo_project_ops
+      - client: todo-app
+        role: todo_project_sales
+      - client: notes-app
+        role: notes_project_hr
+      - client: notes-app
+        role: notes_project_fin
+      - client: notes-app
+        role: notes_project_ops
+      - client: notes-app
+        role: notes_project_sales

@@ -1,0 +1,82 @@
+# Operation-level groups for TODO app permissions
+groups:
+  # Permission levels
+  - name: TODO_WRITE
+    description: TODO app writers - create and modify tasks
+    members:
+      - alice
+      - bob
+    attributes:
+      type: operation
+      level: write
+
+  - name: TODO_READ
+    description: TODO app readers - view only access
+    members:
+      - alice
+    attributes:
+      type: operation
+      level: read
+
+  # Notes app permission levels
+  - name: NOTES_WRITE
+    description: NOTES app writers - create and modify notes
+    members:
+      - alice
+      - bob
+      - charlie
+    attributes:
+      type: operation
+      level: write
+
+  - name: NOTES_READ
+    description: NOTES app readers - view only access
+    members:
+      - alice
+      - bob
+    attributes:
+      type: operation
+      level: read
+
+  # Resource groups - Projects
+  - name: PROJECT_HR
+    description: HR Management project
+    members:
+      - alice
+      - charlie
+      - diana
+    attributes:
+      type: resource
+      project: hr
+      department: Human Resources
+
+  - name: PROJECT_FIN
+    description: Finance Management project
+    members:
+      - bob
+      - charlie
+      - diana
+    attributes:
+      type: resource
+      project: finance
+      department: Finance
+
+  - name: PROJECT_OPS
+    description: Operations Management project
+    members:
+      - bob
+      - charlie
+    attributes:
+      type: resource
+      project: operations
+      department: Operations
+
+  - name: PROJECT_SALES
+    description: Sales Management project
+    members:
+      - alice
+      - diana
+    attributes:
+      type: resource
+      project: sales
+      department: Sales
