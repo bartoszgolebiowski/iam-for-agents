@@ -275,6 +275,91 @@ bootstrap_clients() {
     log_info "Client and scope bootstrap completed"
 }
 
+# Parse client roles and service account role mappings from YAML
+bootstrap_client_role_mappings() {
+    if [ ! -f "$CLIENTS_FILE" ]; then
+        log_error "Clients file not found: $CLIENTS_FILE"
+        return 1
+    fi
+
+    log_info "Starting to bootstrap client roles and service-account mappings from $CLIENTS_FILE..."
+
+    # 1. Create declared client roles
+    local role_client_keys
+    role_client_keys=$(yq '.clientRoles | keys | .[]' "$CLIENTS_FILE" 2>/dev/null || echo "")
+
+    if [ -n "$role_client_keys" ]; then
+        for client_key in $role_client_keys; do
+            local role_count
+            role_count=$(yq ".clientRoles[\"$client_key\"] | length" "$CLIENTS_FILE" 2>/dev/null || echo 0)
+
+            if [ "$role_count" == "null" ] || [ "$role_count" -le 0 ]; then
+                continue
+            fi
+
+            for ((i=0; i<role_count; i++)); do
+                local role_name role_desc
+                role_name=$(yq -r ".clientRoles[\"$client_key\"][$i].name" "$CLIENTS_FILE")
+                role_desc=$(yq -r ".clientRoles[\"$client_key\"][$i].description // \"\"" "$CLIENTS_FILE" 2>/dev/null || echo "")
+
+                [ -z "$role_name" ] || [ "$role_name" == "null" ] && continue
+                create_client_role "$client_key" "$role_name" "$role_desc"
+            done
+        done
+    else
+        log_info "No clientRoles section found in $CLIENTS_FILE"
+    fi
+
+    # 2. Assign client roles to groups (group-based authorization model)
+    if [ ! -f "$GROUPS_FILE" ]; then
+        log_warning "Groups file not found: $GROUPS_FILE (skipping group role mappings)"
+        log_info "Client role bootstrap completed"
+        return 0
+    fi
+
+    local group_count
+    group_count=$(yq '.groups | length' "$GROUPS_FILE" 2>/dev/null || echo 0)
+
+    if [ "$group_count" == "null" ] || [ "$group_count" -le 0 ]; then
+        log_info "No groups found in $GROUPS_FILE; skipping group role mappings"
+        log_info "Client role bootstrap completed"
+        return 0
+    fi
+
+    for ((g=0; g<group_count; g++)); do
+        local group_name
+        group_name=$(yq -r ".groups[$g].name" "$GROUPS_FILE")
+
+        [ -z "$group_name" ] || [ "$group_name" == "null" ] && continue
+
+        case "$group_name" in
+            TODO_WRITE)
+                assign_client_role_to_group "$group_name" "todo-app" "todo_writer"
+                ;;
+            TODO_READ)
+                assign_client_role_to_group "$group_name" "todo-app" "todo_reader"
+                ;;
+            NOTES_WRITE)
+                assign_client_role_to_group "$group_name" "notes-app" "notes_writer"
+                ;;
+            NOTES_READ)
+                assign_client_role_to_group "$group_name" "notes-app" "notes_reader"
+                ;;
+            PROJECT_*)
+                local suffix
+                suffix=$(echo "$group_name" | tr '[:upper:]' '[:lower:]' | sed 's/^project_//')
+                assign_client_role_to_group "$group_name" "todo-app" "todo_project_${suffix}"
+                assign_client_role_to_group "$group_name" "notes-app" "notes_project_${suffix}"
+                ;;
+            *)
+                log_warning "No client-role mapping rule defined for group '${group_name}', skipping"
+                ;;
+        esac
+    done
+
+    log_info "Client role and group mapping bootstrap completed"
+}
+
 # Main execution
 main() {
     echo ""
@@ -321,6 +406,14 @@ main() {
     # Bootstrap groups
     if ! bootstrap_groups; then
         log_error "Group bootstrap failed"
+        exit 1
+    fi
+
+    echo ""
+
+    # Bootstrap client-role mappings after groups are created
+    if ! bootstrap_client_role_mappings; then
+        log_error "Client role bootstrap failed"
         exit 1
     fi
     

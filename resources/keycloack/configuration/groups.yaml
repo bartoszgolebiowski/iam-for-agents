@@ -14,6 +14,7 @@ groups:
     description: TODO app readers - view only access
     members:
       - alice
+      - diana
     attributes:
       type: operation
       level: read
@@ -23,8 +24,7 @@ groups:
     description: NOTES app writers - create and modify notes
     members:
       - alice
-      - bob
-      - charlie
+      - diana
     attributes:
       type: operation
       level: write
@@ -43,8 +43,6 @@ groups:
     description: HR Management project
     members:
       - alice
-      - charlie
-      - diana
     attributes:
       type: resource
       project: hr
@@ -54,8 +52,6 @@ groups:
     description: Finance Management project
     members:
       - bob
-      - charlie
-      - diana
     attributes:
       type: resource
       project: finance
@@ -64,7 +60,6 @@ groups:
   - name: PROJECT_OPS
     description: Operations Management project
     members:
-      - bob
       - charlie
     attributes:
       type: resource
@@ -74,7 +69,6 @@ groups:
   - name: PROJECT_SALES
     description: Sales Management project
     members:
-      - alice
       - diana
     attributes:
       type: resource

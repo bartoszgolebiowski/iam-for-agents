@@ -451,3 +451,262 @@ create_client() {
         return 1
     fi
 }
+
+# Get internal Keycloak client UUID by public clientId
+get_client_internal_id() {
+    local client_id="$1"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${client_id}" \
+        2>/dev/null | jq -r '.[0].id // empty')
+
+    if [ -n "$internal_id" ]; then
+        echo "$internal_id"
+        return 0
+    fi
+
+    log_error "Client '${client_id}' not found"
+    return 1
+}
+
+# Create a client role
+# Usage: create_client_role <client_id> <role_name> [description]
+create_client_role() {
+    local client_id="$1"
+    local role_name="$2"
+    local description="${3:-}"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    local exists_http_code
+    exists_http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ "$exists_http_code" == "200" ]; then
+        log_warning "Role '${role_name}' already exists on client '${client_id}'"
+        return 0
+    fi
+
+    log_info "Creating role '${role_name}' on client '${client_id}'..."
+
+    local role_json
+    role_json=$(jq -a -cn \
+        --arg name "$role_name" \
+        --arg description "$description" \
+        '{name: $name, description: $description}')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$role_json" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/roles" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "201" ] || [ "$http_code" == "204" ]; then
+        log_info "Role '${role_name}' created on client '${client_id}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to create role '${role_name}' on client '${client_id}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Get service account user ID for a client with service accounts enabled
+# Usage: get_service_account_user_id <client_id>
+get_service_account_user_id() {
+    local client_id="$1"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local internal_id
+    internal_id=$(get_client_internal_id "$client_id") || return 1
+
+    local user_id
+    user_id=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${internal_id}/service-account-user" \
+        2>/dev/null | jq -r '.id // empty')
+
+    if [ -n "$user_id" ]; then
+        echo "$user_id"
+        return 0
+    fi
+
+    log_error "Service account user not found for client '${client_id}'"
+    return 1
+}
+
+# Assign a realm role to a user by user ID
+# Usage: assign_realm_role_to_user_id <user_id> <realm_role_name>
+assign_realm_role_to_user_id() {
+    local user_id="$1"
+    local role_name="$2"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local role_json
+    role_json=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ -z "$role_json" ] || [ "$(echo "$role_json" | jq -r '.error // empty' 2>/dev/null)" != "" ]; then
+        log_error "Realm role '${role_name}' not found"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -a -cn --argjson role "$role_json" '[ $role ]')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users/${user_id}/role-mappings/realm" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Assigned realm role '${role_name}' to user '${user_id}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to assign realm role '${role_name}' to user '${user_id}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Assign a client role to a user by user ID
+# Usage: assign_client_role_to_user_id <user_id> <target_client_id> <role_name>
+assign_client_role_to_user_id() {
+    local user_id="$1"
+    local target_client_id="$2"
+    local role_name="$3"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local target_internal_id
+    target_internal_id=$(get_client_internal_id "$target_client_id") || return 1
+
+    local role_json
+    role_json=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${target_internal_id}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ -z "$role_json" ] || [ "$(echo "$role_json" | jq -r '.error // empty' 2>/dev/null)" != "" ]; then
+        log_error "Role '${role_name}' not found on client '${target_client_id}'"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -a -cn --argjson role "$role_json" '[ $role ]')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/users/${user_id}/role-mappings/clients/${target_internal_id}" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Assigned client role '${role_name}' (${target_client_id}) to user '${user_id}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to assign client role '${role_name}' (${target_client_id}) to user '${user_id}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
+
+# Assign a client role to a group
+# Usage: assign_client_role_to_group <group_name> <target_client_id> <role_name>
+assign_client_role_to_group() {
+    local group_name="$1"
+    local target_client_id="$2"
+    local role_name="$3"
+
+    if [ -z "$ACCESS_TOKEN" ]; then
+        log_error "Not authenticated. Call get_access_token first."
+        return 1
+    fi
+
+    local group_id
+    group_id=$(get_group_id "$group_name") || return 1
+
+    local target_internal_id
+    target_internal_id=$(get_client_internal_id "$target_client_id") || return 1
+
+    local role_json
+    role_json=$(curl -s -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${target_internal_id}/roles/${role_name}" \
+        2>/dev/null)
+
+    if [ -z "$role_json" ] || [ "$(echo "$role_json" | jq -r '.error // empty' 2>/dev/null)" != "" ]; then
+        log_error "Role '${role_name}' not found on client '${target_client_id}'"
+        return 1
+    fi
+
+    local payload
+    payload=$(jq -a -cn --argjson role "$role_json" '[ $role ]')
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/groups/${group_id}/role-mappings/clients/${target_internal_id}" \
+        2>/dev/null)
+
+    local http_code
+    http_code=$(echo "$response" | tail -n1)
+
+    if [ "$http_code" == "204" ]; then
+        log_info "Assigned client role '${role_name}' (${target_client_id}) to group '${group_name}'"
+        return 0
+    fi
+
+    local response_body
+    response_body=$(echo "$response" | sed '$d')
+    log_error "Failed to assign client role '${role_name}' (${target_client_id}) to group '${group_name}' (HTTP ${http_code})"
+    [ -n "$response_body" ] && log_error "Response body: ${response_body}"
+    return 1
+}
